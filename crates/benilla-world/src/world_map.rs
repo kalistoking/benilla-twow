@@ -53,8 +53,14 @@ pub struct MapChange;
 
 /// Startup set the world-map catalog loads in, so the terrain/WDL streamers can order their own setup
 /// after it (they read [`MapCatalogRes`]/[`CurrentMap`] the moment they initialize).
+///
+/// Public because that ordering is not only the streamers' business: [`load_world_map`] SEEDS
+/// [`CurrentMap`] from `$WOW_MAP`, overwriting whatever was there, so a server-less embedder that
+/// knows which map it wants — one spawning a single subject at a recorded position, say — has to
+/// write it after this set rather than before the app runs. `$WOW_MAP` is the other way in, and
+/// the only way for a program that cannot set process environment variables.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct WorldMapLoad;
+pub struct WorldMapLoad;
 
 /// Loads `Map.dbc` into [`MapCatalogRes`] and seeds [`CurrentMap`] at startup (after the patch chain
 /// opens), before any map-keyed subsystem sets up.
