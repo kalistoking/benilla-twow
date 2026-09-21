@@ -95,7 +95,8 @@ impl Plugin for NetPlugin {
             Update,
             publish_world_time.in_set(benilla_world::schedule::WorldStage::Net),
         );
-        app.insert_resource(NetEvents(handles.events))
+        app.insert_resource(WorldFeed(handles.feed))
+            .insert_resource(NetEvents(handles.events))
             .insert_resource(NetCommands(handles.commands))
             .insert_resource(CharPick(handles.pick))
             .insert_resource(RealmChoice(handles.realm))
@@ -466,6 +467,22 @@ pub(crate) struct ActiveMover;
 /// The inbound event channel — drained each frame by [`apply_net_updates`].
 #[derive(Resource)]
 pub(crate) struct NetEvents(Receiver<SessionEvent>);
+
+/// **The other end of that channel**, for something that supplies the world itself.
+///
+/// `connect: false` already means "the channel resources exist and no IO thread runs"; this is
+/// what makes that arrangement useful to an embedder rather than merely harmless. Push a
+/// [`SessionEvent`] and the client takes it down the path a real session takes: creates the
+/// object, resolves its display, spawns the model, nameplates it, and lights whatever of its UI
+/// the object's fields feed.
+///
+/// **It is the same channel the IO thread writes**, so with `connect: true` both are writing and
+/// the app cannot tell them apart -- which is the point, and also the reason an embedder should
+/// pick one or the other rather than mixing a live session with a synthesised one.
+///
+/// Held by trt (ARCHITECTURE §3.1a, 2026-09-21), which turns a decoded capture into these.
+#[derive(Resource, Clone)]
+pub struct WorldFeed(pub Sender<SessionEvent>);
 
 /// The outbound command channel — cloned by the player/chat systems to send movement + chat.
 #[derive(Resource)]

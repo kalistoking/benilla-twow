@@ -225,6 +225,12 @@ pub use ui_script::EguiPointerOver;
 /// Insert this when the embedder drives the world camera itself -- the client's own rig then
 /// stands down. See [`run_mode::CameraAuthoredElsewhere`].
 pub use run_mode::CameraAuthoredElsewhere;
+/// The write end of the client's inbound world channel, for an embedder that supplies the world
+/// itself. See [`net::WorldFeed`].
+pub use net::WorldFeed;
+/// What arrives on that channel -- the protocol crate's own type, re-exported so an embedder does
+/// not have to name a second dependency to say one sentence.
+pub use benilla_protocol::events::SessionEvent;
 /// The world viewer's entry point — the engine with no game attached (decision 1160).
 /// Its shim (`benilla-worldview`) is this library's second caller; see [`worldview`].
 pub use benilla_world::worldview::run as run_worldview;

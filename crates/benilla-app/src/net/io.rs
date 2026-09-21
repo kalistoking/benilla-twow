@@ -294,6 +294,8 @@ enum Cycle {
 /// generation the Cancel button bumps, and the ping clock.
 pub(super) struct NetHandles {
     pub(super) events: Receiver<SessionEvent>,
+    /// The inbound channel's WRITE end, for an embedder that supplies the world (`net::WorldFeed`).
+    pub(super) feed: Sender<SessionEvent>,
     pub(super) commands: Sender<ClientCommand>,
     pub(super) pick: Sender<CharRequest>,
     pub(super) realm: Sender<RealmRequest>,
@@ -307,6 +309,9 @@ pub(super) struct NetHandles {
 /// keeps rendering regardless, and its policy decides what (if anything) answers the park.
 pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
     let (events_tx, events_rx) = crossbeam_channel::unbounded();
+    // Kept rather than dropped with the IO thread: an embedder that supplies the world itself
+    // writes this end (`net::WorldFeed`), and with `connect: false` nothing else holds it.
+    let feed = events_tx.clone();
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let (pick_tx, pick_rx) = crossbeam_channel::unbounded::<CharRequest>();
     let (realm_tx, realm_rx) = crossbeam_channel::unbounded::<RealmRequest>();
@@ -408,6 +413,7 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
     // When not connecting (capture mode), the receivers/`events_tx` drop here: outbound sends
     // become harmless `Err`s (every call site ignores them) and the event stream stays empty forever.
     NetHandles {
+        feed,
         events: events_rx,
         commands: cmd_tx,
         pick: pick_tx,
