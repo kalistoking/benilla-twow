@@ -242,6 +242,20 @@ pub use benilla_protocol::{ObjectFields, ObjectType};
 /// Who the subject is, by server guid — the one thing an embedder that supplies the world cannot
 /// say through a click, a name or a unit token. See [`target::EmbedderSelection`].
 pub use target::EmbedderSelection;
+/// **Ask the client's UI a question**, in its own language.
+///
+/// The Lua VM, widget arena and layout, as a `NonSend` resource:
+/// `world.get_non_send_resource::<UiScript>()`, then `eval::<T>("return …")`. This crate's own
+/// tests ask exactly this way — `return PlayerFrame ~= nil` is how they check the in-game UI came
+/// up — and an embedder has the same question and no way to ask it. Everything about the UI is
+/// otherwise invisible from outside: a frame that never appears, a binding that never fires and a
+/// feed whose gate is shut all look identical from the host, which is a session of guessing per
+/// question.
+///
+/// Read-only by convention, not by type. The VM will run whatever it is handed, and a host that
+/// *drives* the UI from here rather than from the client's own bindings has built a second client
+/// inside the first.
+pub use benilla_ui::script::UiScript;
 /// The two readings a create block's descriptor needs before the object exists: which model to
 /// spawn, and how big. Re-exported with the rest so an embedder reads them **the way the wire
 /// decoder does** rather than reimplementing two per-type rules that are not obvious in either
