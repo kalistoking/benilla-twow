@@ -239,6 +239,9 @@ pub use benilla_protocol::events::SessionEvent;
 /// it). Building fields by hand is what `ObjectFields::from_pairs` is documented for.
 pub use benilla_protocol::events::{EntityKind, MoveSpeeds};
 pub use benilla_protocol::{ObjectFields, ObjectType};
+/// Who the subject is, by server guid — the one thing an embedder that supplies the world cannot
+/// say through a click, a name or a unit token. See [`target::EmbedderSelection`].
+pub use target::EmbedderSelection;
 /// The two readings a create block's descriptor needs before the object exists: which model to
 /// spawn, and how big. Re-exported with the rest so an embedder reads them **the way the wire
 /// decoder does** rather than reimplementing two per-type rules that are not obvious in either

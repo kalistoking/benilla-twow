@@ -420,6 +420,49 @@ pub(super) fn target_by_name_requests(
     }
 }
 
+/// Keep an **embedder's** chosen subject selected — by server guid, through the same tail.
+///
+/// The one thing a host that supplies the world (see [`crate::net::WorldFeed`]) cannot say any
+/// other way. Selection here is client-authoritative and reached through a click, a name or a unit
+/// token; a host feeding the client a recorded session has no mouse, and the unit it wants may
+/// share a name with three others standing beside it. It has the guid, because the guid is what
+/// the wire gave it.
+///
+/// **A standing want, not an event**, and that is the whole reason this is a resource. The host
+/// sets it as it composes the world, before anything has streamed; the object arrives frames or
+/// seconds later, and on a respawn it arrives again under a fresh entity. A one-shot message sent
+/// at composition time would be a no-op every single run. This says *who the subject is* and lets
+/// the client reconcile whenever it can.
+///
+/// Reconciled through [`SelectCommit::commit`] like every other path, so the classification, the
+/// ring, the swing seam and the unit frames all see a selection made the one way selections are
+/// made. Silent while the guid is not streamed — `0x489a40`'s own arm 3, and the same answer
+/// `/target` gives for a name nobody here is wearing. It never *deselects*: a host that wants
+/// nothing selected clears the field and leaves the player's own last click alone, because
+/// overriding that is the player's business (`click::DeselectGuid`).
+#[derive(Resource, Default, Clone, Copy, Debug)]
+pub struct EmbedderSelection(pub Option<u64>);
+
+/// Reconcile [`EmbedderSelection`] against what is actually selected.
+pub(super) fn embedder_selection(
+    want: Option<Res<EmbedderSelection>>,
+    index: Res<GuidIndex>,
+    mut commit: SelectCommit,
+) {
+    let Some(guid) = want.and_then(|w| w.0) else {
+        return;
+    };
+    // Already there. Checked by guid rather than by entity so a respawn -- a fresh entity under
+    // the same guid -- is not mistaken for "still selected" and left pointing at a dead one.
+    if commit.selection.guid == Some(guid) {
+        return;
+    }
+    let Some(&entity) = index.0.get(&guid) else {
+        return; // not streamed yet, or not any more. Silent, and retried next frame.
+    };
+    commit.commit(entity, guid);
+}
+
 /// Drain the **Lua** `TargetByName(name, exactMatch)` asks — the binding half of the same
 /// resolver [`target_by_name_requests`] runs for `/target`.
 ///

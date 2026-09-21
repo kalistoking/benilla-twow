@@ -129,6 +129,16 @@ pub(super) fn maintain_embodiment(
         // apply would otherwise fire after we let go and yank the unit back to a pose it left.
         commands.entity(e).insert(Embodied).remove::<RemoteMotion>();
     }
+    // **Which body the client is in, said once per change.** Everything the player half does
+    // hangs off this -- the camera's anchor, the unit frames, the controller -- so a session
+    // where it never resolves looks like four separate faults at once: a camera parked at the
+    // default spawn, no player frame, no target frame, no movement. One line turns that into one
+    // reading. (Found embedding the client: a host that supplies its own world has to get the
+    // self player streamed before any of it comes up, and there was no way to see whether it had.)
+    match want {
+        Some(e) => info!("embodied: {e} (guid {want_guid:?})"),
+        None => info!("embodied: nobody (guid {want_guid:?} is not streamed)"),
+    }
 }
 
 #[cfg(test)]

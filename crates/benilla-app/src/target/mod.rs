@@ -129,6 +129,8 @@ pub(crate) use scan::{attack_order_target, AttackNearestRequest, TargetScan};
 // The chat layer's by-name selection asks (`/target`, `/assist` — decision 0886), answered by the
 // shared resolver the reference parameterises per caller.
 pub(crate) use by_name::{AssistRequest, TargetByNameRequest};
+/// An embedder's standing "this is the subject" — see [`by_name::EmbedderSelection`].
+pub use by_name::EmbedderSelection;
 // The byte-verified reaction decode + its faction catalog, reused by the unit-frame feed to tint the
 // target's name plate (`TargetFrame_CheckFaction`) the same way the selection ring colours itself.
 // `duel_rung` is the diagnostic face of the same walk, for `/reaction` (decision 0637).
@@ -494,6 +496,7 @@ impl Plugin for TargetPlugin {
                         // `TargetByName`), beside the chat layer's — same resolver, same commit,
                         // one extra argument the slash command cannot supply.
                         by_name::script_target_by_name_requests,
+                        by_name::embedder_selection,
                         by_name::assist_requests,
                         by_name::follow_requests,
                     )
