@@ -481,7 +481,8 @@ pub fn run(build: BuildId) -> AppExit {
     // probe shield — one group, in the slot the panel has always held (it sets up the egui
     // context the perf pill needs). `--no-default-features` compiles every one of them out; see
     // `dev.rs` for what is in the group and the one rule that governs the boundary.
-    .add_plugins(touch::TouchPlugin)
+    // `touch::TouchPlugin` is inside `GamePlugins` now -- a member of that group reads what it
+    // publishes, so the group carries it.
     .add_plugins(android_keyboard::AndroidKeyboardPlugin)
     .add_plugins(dev::DevToolsPlugin)
     // The FPS journal — the one instrument that ships (2008): `/console fpsJournal 1` in any

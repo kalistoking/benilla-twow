@@ -125,6 +125,12 @@ pub struct GamePlugins {
 impl PluginGroup for GamePlugins {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
+            // **The finger**, first, because a member of this group reads what it publishes:
+            // `glue::glue_clicks` takes `Res<TouchPointer>` and a group that cannot stand up
+            // without a plugin `run()` happens to add before it is a group only `run()` can add.
+            // It was outside until an embedder tried to compose the client and found the hole
+            // (trt, 2026-09-21).
+            .add(crate::touch::TouchPlugin)
             // The game's own WGSL, compiled into the binary (decision 1175) — before anything that could
             // ask for one. The engine's seven register themselves inside `WorldPlugins`, which
             // `run()` adds ahead of this group.
