@@ -560,7 +560,23 @@ pub(crate) struct LoginAbandon(pub(crate) std::sync::Arc<std::sync::atomic::Atom
 /// [`apply_net_updates`]; read-only to everyone else (the merchant range-close resolves its vendor
 /// through it).
 #[derive(Resource, Default)]
-pub(crate) struct GuidIndex(pub(crate) HashMap<u64, Entity>);
+pub struct GuidIndex(pub(crate) HashMap<u64, Entity>);
+
+impl GuidIndex {
+    /// Which entity holds this server guid, if the world holds it at all.
+    ///
+    /// **For an embedder that supplies the world** (`net::WorldFeed`): it named the objects by
+    /// guid on the way in, and it has no other way back to what the app built from them --
+    /// a camera that follows the recording's own player needs the entity, and the guid is the
+    /// only name the two sides share. The same gap [`crate::target::EmbedderSelection`] fills
+    /// for the selection.
+    ///
+    /// Read-only by construction: the map is maintained solely by `apply_net_updates`, and this
+    /// hands out a copy of an `Entity`, not a way into the map.
+    pub fn entity(&self, guid: u64) -> Option<Entity> {
+        self.0.get(&guid).copied()
+    }
+}
 
 /// Our own player's guid, once the IO thread reports we're in the world. Used to tag
 /// [`SelfPlayer`], and read by the combat-text emitters' source-ownership classifier
