@@ -250,12 +250,19 @@ pub use benilla_protocol::messages::ChatMessage;
 /// guessing: a teleport is the one pose the client never smooths toward. Re-exported with the
 /// rest of that vocabulary.
 pub use benilla_protocol::messages::RelayVerb;
+/// What a creature's spline dictates about its final facing — the other field of
+/// [`SessionEvent::MonsterMove`] an embedder has to fill, and one where the honest answer is
+/// usually `None`: a plain move faces along its own path.
+pub use benilla_protocol::messages::MonsterMoveFacing;
 /// guid -> the entity the app built for it, for an embedder that named its world's objects by
 /// guid and needs a way back to what was built from them. See [`GuidIndex::entity`].
 pub use net::GuidIndex;
 /// Who the subject is, by server guid — the one thing an embedder that supplies the world cannot
 /// say through a click, a name or a unit token. See [`target::EmbedderSelection`].
 pub use target::EmbedderSelection;
+/// What is selected, by server guid -- the read-back an embedder needs to learn that the person
+/// clicked something else. See [`Selection::guid`].
+pub use target::Selection;
 /// **Ask the client's UI a question**, in its own language.
 ///
 /// The Lua VM, widget arena and layout, as a `NonSend` resource:

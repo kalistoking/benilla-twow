@@ -143,9 +143,24 @@ pub(crate) use click::DeselectGuid;
 /// deselect or when the target streams out. The guid is what we send in `CMSG_SET_SELECTION` and, later,
 /// what unit frames / other-unit rings key off.
 #[derive(Resource, Default)]
-pub(crate) struct Selection {
+pub struct Selection {
     pub(crate) target: Option<Entity>,
     pub(crate) guid: Option<u64>,
+}
+
+impl Selection {
+    /// **What is selected, by server guid** -- for an embedder that supplies the world.
+    ///
+    /// It named the objects by guid on the way in ([`crate::net::WorldFeed`]) and says which one
+    /// is the subject by guid ([`EmbedderSelection`]); this is the other direction, and it is the
+    /// only one a click can be read through. A host whose panels describe the selected creature
+    /// has no other way to learn that the person clicked a different one.
+    ///
+    /// Read-only: the fields stay crate-private, so selection is still made the one way
+    /// selections are made (`SelectCommit::commit`).
+    pub fn guid(&self) -> Option<u64> {
+        self.guid
+    }
 }
 
 /// The **character-model pick** this frame — the one ray pass over every skinned body in the scene,
