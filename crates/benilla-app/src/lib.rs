@@ -245,6 +245,11 @@ pub use benilla_protocol::{ObjectFields, ObjectType};
 /// say what happened in it.
 pub use benilla_protocol::messages::{AttackerState, PartyKillLog, SpellDamageLog};
 pub use benilla_protocol::messages::ChatMessage;
+/// What a relayed move packet's opcode means on top of the pose — the third field of
+/// [`SessionEvent::UnitMove`] an embedder has to fill, and the one it cannot fill honestly by
+/// guessing: a teleport is the one pose the client never smooths toward. Re-exported with the
+/// rest of that vocabulary.
+pub use benilla_protocol::messages::RelayVerb;
 /// Who the subject is, by server guid — the one thing an embedder that supplies the world cannot
 /// say through a click, a name or a unit token. See [`target::EmbedderSelection`].
 pub use target::EmbedderSelection;
