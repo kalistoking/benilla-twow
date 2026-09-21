@@ -245,6 +245,10 @@ pub use benilla_protocol::{ObjectFields, ObjectType};
 /// say what happened in it.
 pub use benilla_protocol::messages::{AttackerState, PartyKillLog, SpellDamageLog};
 pub use benilla_protocol::messages::ChatMessage;
+/// A full item-template answer — what an embedder fills when it knows what one of a unit's worn
+/// items IS. `Default` is there for exactly that case: a host that resolves an item's look from a
+/// reference table answers a dozen of these fields and none of the others.
+pub use benilla_protocol::messages::ItemInfo;
 /// What a relayed move packet's opcode means on top of the pose — the third field of
 /// [`SessionEvent::UnitMove`] an embedder has to fill, and the one it cannot fill honestly by
 /// guessing: a teleport is the one pose the client never smooths toward. Re-exported with the

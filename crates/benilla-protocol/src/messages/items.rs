@@ -25,7 +25,12 @@ use crate::wire::{read_cstring, read_f32_le, read_i32_le, read_u32_le, read_u64_
 /// A full item-template answer (decision 0274 P1: the tooltip builder's source of truth; every
 /// field the wire carries, none discarded). (`PartialEq` only: several fields are wire floats —
 /// the damage bounds and `ranged_mod_range`.)
-#[derive(Debug, Clone, PartialEq)]
+/// `Default` is for an **embedder that knows some of this and not the rest** (`net::WorldFeed`):
+/// a host replaying a recorded session has the item's entry off the wire and resolves its look
+/// from a reference table, which answers a dozen of these fields and none of the others. Filling
+/// the rest by hand would be fifty zeros written out; `..Default::default()` is the same zeros
+/// with the intent visible. The wire decoder does not use it -- it fills every field.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ItemInfo {
     pub class: u32,
     pub subclass: u32,
