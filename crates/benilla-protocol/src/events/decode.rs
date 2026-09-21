@@ -1229,7 +1229,7 @@ fn entity_kind(t: ObjectType) -> EntityKind {
 /// a flesh→bones flag flip, which the reference reacts to with a full model reload.
 ///
 /// Cast from the wire `i32`; `0`/absent → `None`.
-fn display_id(t: ObjectType, mask: &ObjectFields) -> Option<u32> {
+pub fn display_id(t: ObjectType, mask: &ObjectFields) -> Option<u32> {
     match t {
         ObjectType::Unit | ObjectType::Player => {
             mask.unit_displayid().filter(|&d| d > 0).map(|d| d as u32)
@@ -1249,7 +1249,7 @@ fn display_id(t: ObjectType, mask: &ObjectFields) -> Option<u32> {
 /// CreatureDisplayInfo/CreatureModelData scale into it (vmangos `Unit::GetScaleForDisplayId`), so it is
 /// *not* multiplied again client-side. Defaults to `1.0` when absent or non-positive (the server always
 /// sends a positive value on create).
-fn object_scale(t: ObjectType, mask: &ObjectFields) -> f32 {
+pub fn object_scale(t: ObjectType, mask: &ObjectFields) -> f32 {
     let raw = match t {
         // A corpse joins them: `OBJECT_FIELD_SCALE_X` is an OBJECT-block field and vmangos sets it
         // (`Corpse::Create` → `SetObjectScale(DEFAULT_OBJECT_SCALE)`), so the same one-field law

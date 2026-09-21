@@ -68,7 +68,11 @@ pub struct MoveSpeeds {
 
 impl MoveSpeeds {
     /// From the wire order `[walk, run, run_back, swim, swim_back, turn_rate]` (RF-0058).
-    fn from_wire(s: [f32; 6]) -> Self {
+    ///
+    /// Public for an embedder that supplies the world itself: a create block's speeds arrive in
+    /// this order wherever they are read from, and an embedder re-ordering them by hand is a
+    /// creature that walks at its turn rate.
+    pub fn from_wire(s: [f32; 6]) -> Self {
         Self {
             walk: s[0],
             run: s[1],
@@ -1648,5 +1652,5 @@ pub enum Poll {
     Skipped { opcode: u16, reason: String },
 }
 
-mod decode;
+pub mod decode;
 pub use decode::decode;

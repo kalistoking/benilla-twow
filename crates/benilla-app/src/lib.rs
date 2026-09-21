@@ -231,6 +231,20 @@ pub use net::WorldFeed;
 /// What arrives on that channel -- the protocol crate's own type, re-exported so an embedder does
 /// not have to name a second dependency to say one sentence.
 pub use benilla_protocol::events::SessionEvent;
+/// The vocabulary a [`SessionEvent`] is built out of, re-exported for the same reason.
+///
+/// An embedder that supplies the world has to *say* what it is supplying, and saying it takes
+/// these: which kind of thing this is ([`EntityKind`]), how fast it moves ([`MoveSpeeds`]), and
+/// its descriptor block ([`ObjectFields`], marked with the [`ObjectType`] whose descriptor bounds
+/// it). Building fields by hand is what `ObjectFields::from_pairs` is documented for.
+pub use benilla_protocol::events::{EntityKind, MoveSpeeds};
+pub use benilla_protocol::{ObjectFields, ObjectType};
+/// The two readings a create block's descriptor needs before the object exists: which model to
+/// spawn, and how big. Re-exported with the rest so an embedder reads them **the way the wire
+/// decoder does** rather than reimplementing two per-type rules that are not obvious in either
+/// direction (a GameObject's display is a different field; a unit's scale is already folded).
+pub use benilla_protocol::events::decode::{display_id as create_display_id,
+    object_scale as create_object_scale};
 /// The world viewer's entry point — the engine with no game attached (decision 1160).
 /// Its shim (`benilla-worldview`) is this library's second caller; see [`worldview`].
 pub use benilla_world::worldview::run as run_worldview;
