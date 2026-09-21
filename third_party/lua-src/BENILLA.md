@@ -103,3 +103,50 @@ project had already written down — the substitution happens in `OP_TFORPREP`, 
 *not* in `OP_TFORLOOP`; and the test is a bare `ttistable` with no `__call` check. Stock 5.0 was
 corroboration, never the authority: the client links 5.0 but may be modified, and only the byte-read
 of the client settles what it actually does.
+
+## If you embed benilla: `[patch]` is not inherited
+
+Cargo honours `[patch]` **only in the workspace root of the build being run**. A crate that depends
+on benilla's crates therefore does not get this fork — its own workspace root is the root, benilla's
+`[patch.crates-io]` is inert from there, and `lua-src` resolves to stock `550.0.0` from crates.io.
+
+Nothing fails when that happens. The build succeeds, the client starts, and the VM underneath is
+plain 5.1. **All eight hunks go at once**, which is the part worth internalising: an embedder meets
+whichever one its workload touches first and has no reason to suspect the other seven.
+
+This is not hypothetical. On 2026-09-21 an embedder driving `benilla-app` as a library hit it and
+spent a day inside this crate's Lua layer before finding it: the symptom it met first was the
+`lvm.c` hunk's, 23 FrameXML functions throwing `attempt to call a table value`, `UIFrameIsFlashing`
+41,458 times in a 16-second run out of `FCF_OnUpdate`. It read exactly like a benilla bug and was
+one missing line in the embedder's own manifest. The same rule had already bitten the same embedder
+once for `kira`, and had been written down — applied to one of its two consequences.
+
+**So mirror every `[patch]` line this repository's workspace root declares, not the one whose
+symptom you happened to meet.**
+
+Verifying the fix has its own trap. "Zero occurrences of the error I was chasing" confirms one hunk;
+two of the others fail *silently* and would never present as that error:
+
+- **`recfield`** (2111) — dense integer keys stay in the hash part, `next` walks them in slot order,
+  and every list in every saved-variables file comes back scrambled. No error at all, just wrong
+  order.
+- **`LUA_QL`** (2122) — AceLibrary's `argCheck` parses its own caller out of `debugstack()` with a
+  pattern that needs 5.0's backquote, and ~80 corpus addons ship Ace.
+
+The cheap check is the lockfile, which distinguishes a path override from a registry crate without
+building anything:
+
+```sh
+grep -A4 'name = "lua-src"' Cargo.lock
+```
+
+A patched build prints `name`/`version`/`dependencies` and **no `source` and no `checksum`** — those
+two lines are what a crates.io dependency carries and a path override does not.
+
+One dead end, recorded so it is not tried again: a `__call` metamethod cannot substitute for the
+`lvm.c` hunk. `debug.setmetatable({}, { __call = ... })` sets the metatable of that one anonymous
+table and nothing else — `lapi.c:710-726` stores the metatable **on the object** for `LUA_TTABLE`
+and `LUA_TUSERDATA`, and only the `default:` arm (numbers, strings, booleans, nil, functions) writes
+the type-wide `G(L)->mt[ttype(obj)]`. Lua 5.1 has no default metatable for tables to install. The
+byte-read reaches the same conclusion from the other side: the client's test is a bare type-tag
+equality that never consults a metatable, so a table carrying `__call` still gets `next`.
