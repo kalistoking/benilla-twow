@@ -303,6 +303,15 @@ pub(in crate::entities) fn resolve_equipment(
                 };
                 match templates.held(entry, &net) {
                     Some(t) => eq.bodyslots[idx] = t.display_info_id,
+                    // **A negative IS an answer**, and this is decision 0552's own distinction,
+                    // which the cast-fail redisplay already keys on: pending → keep waiting,
+                    // answered-unknown → give up rather than wait forever. Both read `None` from
+                    // `held`, so without this the two are the same value and a slot the server
+                    // does not know keeps `settled` false for the life of the session -- and a
+                    // player is not attached until it settles, so the body never appears at all.
+                    // Found by an embedder supplying its own world, where "the server does not
+                    // know this entry" is the ordinary answer rather than a rarity.
+                    None if templates.template_answered_unknown(entry) => {}
                     None => eq.settled = false, // asked; answer pending
                 }
             }
@@ -314,6 +323,8 @@ pub(in crate::entities) fn resolve_equipment(
             if let Some(entry) = s.player_visible_item_entry(14).filter(|e| *e != 0) {
                 match templates.held(entry, &net) {
                     Some(t) => eq.cloak = t.display_info_id,
+                    // The same distinction as the composite slots above.
+                    None if templates.template_answered_unknown(entry) => {}
                     None => eq.settled = false,
                 }
             }

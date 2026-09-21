@@ -439,6 +439,46 @@ pub(super) fn attach_entity_visuals(
         // the sequence clock, the PlayerName anchor, the emitters. Keying the whole build on a
         // drawn batch is what left the Naxxramas weapon mobs — an `InvisibleStalker` body holding
         // a visible axe — with no axe and their name plate flat on the floor.
+        // **Say when a body does not get built, once per display.**
+        //
+        // Everything above this point is silent about failure by design -- a display that named no
+        // model is a gap, a model still loading is a wait, and both simply produce no visual. From
+        // outside they are one symptom: a unit the client holds, indexes, targets and answers
+        // bindings about, with nothing standing where it is. An embedder supplying its own world
+        // meets that symptom first and has no way to tell the three apart.
+        //
+        // One `info!` per display id, so a body that never arrives says which of the three it was.
+        // A process-global rather than a `Local`, because this system is at Bevy's 16-parameter
+        // ceiling and a diagnostic has no business costing a body build.
+        static SAID_ABOUT: std::sync::Mutex<Option<std::collections::HashSet<u32>>> =
+            std::sync::Mutex::new(None);
+        let mut said = SAID_ABOUT.lock().unwrap_or_else(|e| e.into_inner());
+        let said_about = said.get_or_insert_with(Default::default);
+        if let Some(disp) = net.display_id.filter(|d| !said_about.contains(d)) {
+            match dm {
+                None => {
+                    said_about.insert(disp);
+                    info!(
+                        "attach: display {disp} ({:?}) is in no model cache -- nothing to build",
+                        net.kind
+                    );
+                }
+                Some(d) if d.parts.is_none() => {
+                    info!("attach: display {disp} ({:?}) still loading", net.kind);
+                }
+                Some(_) if !named_a_model => {
+                    said_about.insert(disp);
+                    info!(
+                        "attach: display {disp} ({:?}) named no model file -- a gap, not an                          invisible body",
+                        net.kind
+                    );
+                }
+                Some(_) => {
+                    said_about.insert(disp);
+                    info!("attach: display {disp} ({:?}) building now", net.kind);
+                }
+            }
+        }
         let model = match dm {
             Some(d) => match &d.parts {
                 None => continue,
