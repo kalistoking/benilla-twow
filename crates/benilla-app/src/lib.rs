@@ -222,6 +222,9 @@ pub use game_plugins::GamePlugins;
 /// The pointer arbitration an overlay writes: `true` while the pointer is over it, so the world
 /// below does not also act on the click. See [`ui_script::EguiPointerOver`].
 pub use ui_script::EguiPointerOver;
+/// Insert this when the embedder drives the world camera itself -- the client's own rig then
+/// stands down. See [`run_mode::CameraAuthoredElsewhere`].
+pub use run_mode::CameraAuthoredElsewhere;
 /// The world viewer's entry point — the engine with no game attached (decision 1160).
 /// Its shim (`benilla-worldview`) is this library's second caller; see [`worldview`].
 pub use benilla_world::worldview::run as run_worldview;

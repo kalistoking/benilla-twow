@@ -373,7 +373,7 @@ impl Plugin for PlayerPlugin {
             control
                 .in_set(PlayerControlSet)
                 .in_set(WorldStage::Input)
-                .run_if(not(resource_exists::<crate::run_mode::CaptureMode>))
+                .run_if(crate::run_mode::player_drives_camera)
                 .in_set(crate::char_select::InWorldGated),
         )
         // The posture setter's queue (the `/sit` family — decision 0881; `control` is the sole
@@ -402,7 +402,7 @@ impl Plugin for PlayerPlugin {
             server_ride::drive_self_ride
                 .in_set(WorldStage::Input)
                 .before(control)
-                .run_if(not(resource_exists::<crate::run_mode::CaptureMode>))
+                .run_if(crate::run_mode::player_drives_camera)
                 .in_set(crate::char_select::InWorldGated),
         )
         // A session END releases the avatar — a confirmed `/logout`, or a lost session
@@ -447,7 +447,7 @@ impl Plugin for PlayerPlugin {
                 // Gated off in capture mode alongside `control`, and for the same reason a
                 // capture keeps the doodad rail static: a pinned camera that a passing kodo
                 // could nudge is not a regression baseline any more.
-                .run_if(not(resource_exists::<crate::run_mode::CaptureMode>)),
+                .run_if(crate::run_mode::player_drives_camera),
         )
         // **Which mouse buttons the world owns** (ledger B364) — decoded once, ahead of all
         // three readers: `/follow`'s both-button cancel below, the look session, and the camera's
@@ -487,7 +487,7 @@ impl Plugin for PlayerPlugin {
                 .after(benilla_world::interior::classify_entity_interior)
                 .after(benilla_world::model_fade::apply_render_fade)
                 .after(benilla_world::model_render::ModelVisSet)
-                .run_if(not(resource_exists::<crate::run_mode::CaptureMode>)),
+                .run_if(crate::run_mode::player_drives_camera),
         );
     }
 }

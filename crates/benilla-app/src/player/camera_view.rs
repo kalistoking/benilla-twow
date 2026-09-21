@@ -473,7 +473,7 @@ pub(super) fn plugin(app: &mut App) {
                 .before(super::control)
                 // Capture parks the camera itself (`capture::probe_cam`), and `control` is gated
                 // off there for the same reason; a queued view must not steal a parked pose.
-                .run_if(not(resource_exists::<crate::run_mode::CaptureMode>)),
+                .run_if(crate::run_mode::player_drives_camera),
         );
 }
 

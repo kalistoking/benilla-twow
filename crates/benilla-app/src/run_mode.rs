@@ -31,6 +31,31 @@ use bevy::prelude::*;
 #[derive(Resource)]
 pub(crate) struct CaptureMode;
 
+/// **An embedder is authoring the camera and the avatar this run** — the same sentence
+/// [`CaptureMode`] opens with, and none of the rest of what a capture is.
+///
+/// A tool that composes this client's plugins and supplies the world itself drives the camera the
+/// way the harness does: it decides where the viewer stands, because it knows what the viewer came
+/// to look at. What it does NOT want is the capture's other consequences — chiefly that a capture
+/// run loads no UI (`ui_script::lifecycle::ui_wanted`), which is the opposite of an embedder's
+/// whole reason for being here.
+///
+/// So the two are separate resources and one predicate reads both: [`player_drives_camera`].
+/// Inserted by trt (2026-09-21); a player build has no inserter and the resource never exists.
+#[derive(Resource)]
+pub struct CameraAuthoredElsewhere;
+
+/// Whether the PLAYER's own rig drives the camera and the avatar this run.
+///
+/// The one predicate behind every camera gate, so "something else is driving" is answered in one
+/// place rather than by each site remembering both resources.
+pub(crate) fn player_drives_camera(
+    capture: Option<Res<CaptureMode>>,
+    embedder: Option<Res<CameraAuthoredElsewhere>>,
+) -> bool {
+    capture.is_none() && embedder.is_none()
+}
+
 /// The rig's derived character name (decision 0651), when `$WOW_RIG` names a body.
 ///
 /// Inserted by `capture::ProbeRigPlugin` at build time; absent otherwise — which is the player
