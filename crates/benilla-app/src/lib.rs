@@ -239,6 +239,12 @@ pub use benilla_protocol::events::SessionEvent;
 /// it). Building fields by hand is what `ObjectFields::from_pairs` is documented for.
 pub use benilla_protocol::events::{EntityKind, MoveSpeeds};
 pub use benilla_protocol::{ObjectFields, ObjectType};
+/// The combat log's own message bodies, for an embedder replaying a recorded fight: the swing,
+/// the spell landing, and the killing blow. Re-exported with the rest of the create-block
+/// vocabulary and for the same reason — an embedder that supplies the world has to be able to
+/// say what happened in it.
+pub use benilla_protocol::messages::{AttackerState, PartyKillLog, SpellDamageLog};
+pub use benilla_protocol::messages::ChatMessage;
 /// Who the subject is, by server guid — the one thing an embedder that supplies the world cannot
 /// say through a click, a name or a unit token. See [`target::EmbedderSelection`].
 pub use target::EmbedderSelection;

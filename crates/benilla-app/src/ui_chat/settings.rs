@@ -529,12 +529,24 @@ fn roster(channels: &super::edit::ChannelState) -> Vec<(String, u32)> {
 /// against the reference's `(255,255,255)`, in a run where the same `AddMessage` a second later
 /// came out white.
 pub(crate) fn restore_chat_looks(world: &mut World, script: &mut UiScript) {
-    let Some(id) = world
+    // **Which character's settings, or none at all.**
+    //
+    // `None` is a session with no character select -- an embedder supplying its own world
+    // (`net::WorldFeed`). It used to return here, and that was one gate too many: the FILE half of
+    // this function is about a character and has nothing to do without one, but the EVENT half is
+    // not, and this function's own rule for it is eight lines below -- *"UPDATE_CHAT_WINDOWS
+    // once, then UPDATE_CHAT_COLOR for every registry entry, on the file path and the no-file path
+    // alike"*. `ui_saved` states the same for `VARIABLES_LOADED`: it "fires whether or not there
+    // was a file".
+    //
+    // What that cost, measured from outside: `UPDATE_CHAT_WINDOWS` is the only thing that
+    // registers a chat frame for any `CHAT_MSG_*` (see below), so every line printed reached no
+    // window and was gone with no trace -- and the stock look never reached the frame either, so
+    // `ChatFrameBackground` -- white by design, meant to be tinted -- drew as a white slab over
+    // the chat area.
+    let id = world
         .get_resource::<crate::char_select::Roster>()
-        .and_then(crate::ui_macro::identity)
-    else {
-        return;
-    };
+        .and_then(crate::ui_macro::identity);
     // The `ChannelState` reads are taken as owned rows up front: the restore needs the DBC
     // shortcut table and the auto-join rows while it also holds `ChatWindowFile` mutably, and a
     // `&mut World` hands out one resource borrow at a time.
@@ -553,6 +565,16 @@ pub(crate) fn restore_chat_looks(world: &mut World, script: &mut UiScript) {
     // `ChatWindowFile`'s borrow is scoped, because the mask has to go home to `ChannelState`
     // afterwards and a `&mut World` hands out one resource borrow at a time.
     let mut parsed;
+    let Some(id) = id else {
+        // No character: the no-file path, exactly as the file half takes it below -- window 1
+        // seeded with the auto-join rows -- and then straight on to the events.
+        parsed = Parsed::default();
+        let mut general = ChatWindowLook::stock(0);
+        general.channels = auto_rows.clone();
+        parsed.looks.push((0, general));
+        finish_chat_restore(world, script, parsed, seed_mask, commands);
+        return;
+    };
     {
         let Some(mut file) = world.get_resource_mut::<ChatWindowFile>() else {
             return;
@@ -627,6 +649,22 @@ pub(crate) fn restore_chat_looks(world: &mut World, script: &mut UiScript) {
     } // …and `ChatWindowFile`'s borrow ends here.
       // The mask is durable state from here on (decision 2120): the file's word when it carried one,
       // the DBC seed when it did not, and from then on the confirmed joins' own OR.
+    finish_chat_restore(world, script, parsed, seed_mask, commands);
+}
+
+/// The half of [`restore_chat_looks`] that is not about a character: the durable zone mask, the
+/// looks and colours into the VM, and the loader's two events.
+///
+/// Its own tail until B6, when a session with no character select showed what the identity gate
+/// was costing -- see that gate's note. Lifted whole rather than duplicated, so the two paths
+/// cannot drift.
+fn finish_chat_restore(
+    world: &mut World,
+    script: &mut UiScript,
+    parsed: Parsed,
+    seed_mask: u32,
+    commands: Option<crossbeam_channel::Sender<ClientCommand>>,
+) {
     let mask = parsed.zone_mask.unwrap_or(seed_mask);
     if let Some(mut channels) = world.get_resource_mut::<super::edit::ChannelState>() {
         // `Some` is the reference's "chat system ready" flag (`0x499a18`): the walk and the
