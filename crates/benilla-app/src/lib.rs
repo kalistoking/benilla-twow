@@ -75,7 +75,7 @@ mod doodad_events;
 mod entities;
 mod fishing_line;
 mod footprints;
-mod game_plugins;
+pub mod game_plugins;
 mod glue;
 mod glue_strings;
 mod go_anim;
@@ -215,6 +215,10 @@ use bevy::prelude::*;
 // build id at compile time and hands it into [`run`]. Re-exported so the shim needs no bevy
 // dep of its own.
 pub use benilla_world::build_id::BuildId;
+/// Which screen a session opens on -- an embedder names one when it composes [`GamePlugins`].
+pub use char_select::ClientState;
+/// The game as one plugin group, for an embedder that supplies the world itself.
+pub use game_plugins::GamePlugins;
 /// The world viewer's entry point — the engine with no game attached (decision 1160).
 /// Its shim (`benilla-worldview`) is this library's second caller; see [`worldview`].
 pub use benilla_world::worldview::run as run_worldview;

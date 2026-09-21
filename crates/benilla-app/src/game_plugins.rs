@@ -105,12 +105,21 @@ use crate::ui_unit::UiUnitPlugin;
 use crate::world_backdrop::WorldBackdropPlugin;
 
 /// The game, as one plugin group. The two fields are the two plugins `run()` parameterises.
-pub(crate) struct GamePlugins {
+///
+/// **Public so something other than this crate's `run()` can compose the client.** An embedder --
+/// a tool that wants the client's rendering and its UI, and supplies the world itself -- adds this
+/// group beside [`benilla_world::world_plugins::WorldPlugins`] and answers the same two questions
+/// `run()` answers: whether an IO thread connects, and which screen the session opens on.
+///
+/// `connect: false` is the arrangement the capture harness has run server-less in since decision
+/// 0008: the channel resources exist, nothing runs behind them, and the client draws whatever is
+/// put into its world.
+pub struct GamePlugins {
     /// [`NetPlugin::connect`]: `false` in capture mode — the channel resources exist, no IO
     /// thread runs, so captures are deterministic regardless of whether a server is up.
-    pub(crate) connect: bool,
+    pub connect: bool,
     /// [`crate::char_select::CharSelectPlugin::start`]: the screen this session opens on.
-    pub(crate) start: crate::char_select::ClientState,
+    pub start: crate::char_select::ClientState,
 }
 
 impl PluginGroup for GamePlugins {

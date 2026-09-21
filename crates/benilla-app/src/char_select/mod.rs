@@ -41,7 +41,7 @@ use crate::net::{
 
 /// The app's lifecycle: which screen owns the session (decision 0193).
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub(crate) enum ClientState {
+pub enum ClientState {
     /// Parked pre-logon at the login screen (decision 0539): the IO thread waits for credentials;
     /// [`crate::login`]'s policy decides what answers it (the env fast path, the reconnect
     /// resubmit, or the director's typed submit).
