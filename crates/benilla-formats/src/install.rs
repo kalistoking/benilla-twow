@@ -62,10 +62,36 @@ pub fn wow_data() -> Option<PathBuf> {
 pub fn candidates() -> Vec<PathBuf> {
     candidates_from(
         std::env::var_os("WOW_DATA").map(PathBuf::from),
+        EMBEDDER_DATA.get().cloned(),
         std::env::current_exe()
             .ok()
             .and_then(|e| e.parent().map(Path::to_path_buf)),
     )
+}
+
+/// An embedding host's own answer to "where is the install" — see [`set_wow_data`].
+static EMBEDDER_DATA: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Tell the resolver where the install is, for a host that **knows** but cannot say it in the
+/// environment.
+///
+/// `std::env::set_var` is `unsafe` in Rust 2024, and a host that forbids `unsafe` therefore has no
+/// way to answer this question at all — its own reader finds the install from its own
+/// configuration and every crate here still looks in an environment that says nothing. The
+/// symptom is not an error: the world simply does not load, on a machine with the data sitting
+/// right there. A public seam, in place of an environment variable a library cannot write.
+///
+/// **Below `$WOW_DATA` on purpose.** The module header calls that one *the* explicit override, and
+/// a host that offers its own setting (and documents the variable as winning over it) must not
+/// have that promise quietly inverted here. Above the dev and beside-the-binary candidates,
+/// because a host that names a path knows better than a convention.
+///
+/// Set once, before the app builds; a second call with a different path is refused and returns
+/// `false`, because the resolver is deliberately uncached elsewhere and a value that changed
+/// mid-run would be the one stale answer in a ladder built to have none.
+pub fn set_wow_data(dir: impl Into<PathBuf>) -> bool {
+    let dir = dir.into();
+    EMBEDDER_DATA.get_or_init(|| dir.clone()) == &dir
 }
 
 /// [`candidates`] with the two environment facts passed in, so the ladder can be tested without
@@ -77,8 +103,12 @@ pub fn candidates() -> Vec<PathBuf> {
 /// 1175 each test baked its own `CARGO_MANIFEST_DIR` path and was immune. The env read now happens
 /// in exactly one place that no test mutates; the wiring of that one read is covered out-of-process
 /// by `tests/wow_data_env.rs`.
-fn candidates_from(override_dir: Option<PathBuf>, exe_dir: Option<PathBuf>) -> Vec<PathBuf> {
-    let mut out = Vec::with_capacity(4);
+fn candidates_from(
+    override_dir: Option<PathBuf>,
+    embedder_dir: Option<PathBuf>,
+    exe_dir: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut out = Vec::with_capacity(5);
 
     // 1 · the explicit override — and its EMPTY spelling. `WOW_DATA=` (set, no value) is the
     // answer *there is no install*: it returns no candidates at all, so [`wow_data`] is `None`
@@ -92,6 +122,15 @@ fn candidates_from(override_dir: Option<PathBuf>, exe_dir: Option<PathBuf>) -> V
             return Vec::new();
         }
         out.push(over);
+    }
+
+    // 1b · the embedding host's own answer ([`set_wow_data`]). After the variable, so a host's
+    // "$WOW_DATA wins for a run" stays true; before the conventions, because a host that names a
+    // path knows better than a guess. Note this is NOT reached under the empty spelling above:
+    // `WOW_DATA=` means "there is no install" and an embedder does not get to contradict it, which
+    // is what keeps the no-install boot path reachable on a machine that has one.
+    if let Some(dir) = embedder_dir {
+        out.push(dir);
     }
 
     // 2 · the project folder — dev builds only. `CARGO_MANIFEST_DIR` is THIS crate's, so it is the
@@ -152,7 +191,44 @@ mod tests {
 
     /// No test in here touches the process environment — see [`candidates_from`] for why.
     fn probe(over: Option<&str>, exe: Option<&str>) -> Vec<PathBuf> {
-        candidates_from(over.map(PathBuf::from), exe.map(PathBuf::from))
+        candidates_from(over.map(PathBuf::from), None, exe.map(PathBuf::from))
+    }
+
+    /// The same, with an embedding host's answer in place.
+    fn probe_embedded(over: Option<&str>, embedder: &str, exe: Option<&str>) -> Vec<PathBuf> {
+        candidates_from(
+            over.map(PathBuf::from),
+            Some(PathBuf::from(embedder)),
+            exe.map(PathBuf::from),
+        )
+    }
+
+    /// A host that cannot write the environment still gets an answer in — ahead of every
+    /// convention, because it named a path.
+    #[test]
+    fn an_embedders_path_beats_the_conventions() {
+        let c = probe_embedded(None, "/tool/wow/Data", Some("/games/benilla"));
+        assert_eq!(c.first(), Some(&PathBuf::from("/tool/wow/Data")), "{c:?}");
+        assert!(c.contains(&PathBuf::from("/games/benilla/Data")), "{c:?}");
+    }
+
+    /// ...and behind `$WOW_DATA`, which the module header calls THE explicit override and which
+    /// every host documents as winning for a run. An embedder must not invert that quietly.
+    #[test]
+    fn the_variable_still_wins_over_an_embedder() {
+        let c = probe_embedded(Some("/opt/wow/Data"), "/tool/wow/Data", Some("/games/benilla"));
+        let at = |p: &str| c.iter().position(|c| c == &PathBuf::from(p));
+        assert_eq!(at("/opt/wow/Data"), Some(0), "{c:?}");
+        assert!(at("/tool/wow/Data") < at("/games/benilla/Data"), "{c:?}");
+        assert!(at("/tool/wow/Data") > at("/opt/wow/Data"), "{c:?}");
+    }
+
+    /// `WOW_DATA=` means *there is no install* -- and an embedder does not get to contradict it.
+    /// That empty spelling is how a machine which HAS the data can still run the no-install boot
+    /// path, and an embedder silently supplying one would put that path back out of reach.
+    #[test]
+    fn an_embedder_cannot_overrule_the_empty_spelling() {
+        assert_eq!(probe_embedded(Some(""), "/tool/wow/Data", Some("/games")), Vec::<PathBuf>::new());
     }
 
     /// The override leads, and beside-the-binary always follows in both spellings a player will
@@ -188,7 +264,7 @@ mod tests {
         // Which real candidate wins depends on the build (a dev build has the project folder
         // ahead of the exe dir), so the assertion is the property, not the winner: never the
         // ghost, always something that is actually there.
-        let chosen = candidates_from(Some(ghost.clone()), Some(tmp.clone()))
+        let chosen = candidates_from(Some(ghost.clone()), None, Some(tmp.clone()))
             .into_iter()
             .find(|c| c.is_dir());
         assert_ne!(
