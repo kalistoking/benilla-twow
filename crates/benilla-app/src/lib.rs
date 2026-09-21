@@ -219,6 +219,9 @@ pub use benilla_world::build_id::BuildId;
 pub use char_select::ClientState;
 /// The game as one plugin group, for an embedder that supplies the world itself.
 pub use game_plugins::GamePlugins;
+/// The pointer arbitration an overlay writes: `true` while the pointer is over it, so the world
+/// below does not also act on the click. See [`ui_script::EguiPointerOver`].
+pub use ui_script::EguiPointerOver;
 /// The world viewer's entry point — the engine with no game attached (decision 1160).
 /// Its shim (`benilla-worldview`) is this library's second caller; see [`worldview`].
 pub use benilla_world::worldview::run as run_worldview;

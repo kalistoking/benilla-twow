@@ -110,8 +110,13 @@ pub(crate) struct CapturePointerPinned(pub(crate) bool);
 /// the arbiter takes it as `Option<Res<…>>` so its absence simply means "nothing is hovering the
 /// dev UI" — which is the player-faithful answer. The writer lives in `debug_panel`; a dev
 /// module writing an always-present fact is the allowed direction.
+///
+/// **Public, for an embedder's overlay as much as for this crate's own** (trt, 2026-09-21): a tool
+/// that composes the client and draws its own panels over it is in exactly the position the dev
+/// overlay is in, and the arbitration it needs is this one. Writing it is the whole contract --
+/// `true` while the pointer is over that UI, and the arbiter does the rest.
 #[derive(Resource, Default)]
-pub(crate) struct EguiPointerOver(pub(crate) bool);
+pub struct EguiPointerOver(pub bool);
 
 /// Whether mouseover **world picking** is armed — the dev-chord `I` inspector's mode, toggled by
 /// `debug_panel::inspect`.
