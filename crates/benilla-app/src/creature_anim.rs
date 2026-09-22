@@ -719,6 +719,47 @@ pub(crate) struct MountFlourish {
     pub(crate) unit: Entity,
 }
 
+/// **An embedder asking for one animation on one unit** (`net::WorldFeed`).
+///
+/// A host that supplies the world has a reason to play a sequence that no packet carries: an
+/// inspector stepping through a creature's animations, a tool showing what `AnimationData` row 27
+/// looks like on this model. The wire has no message for that and should not grow one -- it would
+/// be a host's action wearing a server's clothes.
+///
+/// So it arrives as itself, and the client's own one-shot machinery does the rest: the eligibility
+/// rules, the blend, the return to whatever the unit was doing. The same road `/wave` takes.
+///
+/// `anim_id` is an `AnimationData.dbc` id, not an `Emotes.dbc` one -- a host that has a model open
+/// is looking at the model's own sequence list.
+#[derive(Message, Clone, Copy)]
+pub struct PlayAnimation {
+    pub unit: Entity,
+    pub anim_id: u16,
+}
+
+/// [`PlayAnimation`] → [`EmoteAnim`]: the host's ask, stamped and handed to the one-shot player.
+///
+/// The stamp is taken here rather than by the host, for the reason it is taken everywhere else: it
+/// orders a same-frame collision against a swing, and a host has no way to know what the unit is
+/// doing this frame.
+fn embedder_anim(
+    mut msgs: MessageReader<PlayAnimation>,
+    mut out: MessageWriter<EmoteAnim>,
+    mut play_seq: ResMut<PlaySeq>,
+) {
+    for m in msgs.read() {
+        debug!(
+            "embedder: one-shot anim {} on {:?}",
+            m.anim_id, m.unit
+        );
+        out.write(EmoteAnim {
+            entity: m.unit,
+            anim_id: m.anim_id,
+            seq: play_seq.next(),
+        });
+    }
+}
+
 /// [`MountFlourish`] → [`EmoteAnim`]: hop unit → its mount child and fire the one-shot there.
 /// The mount child runs the untouched creature machinery (it is not itself "mounted"), so the
 /// general one-shot player takes it from here — full-body 94 over the mount's gait, returning
@@ -1187,6 +1228,11 @@ impl Plugin for CreatureAnimPlugin {
             .add_message::<EmoteAnim>()
             .add_message::<BaseAnimRecompute>()
             .add_message::<MountFlourish>()
+            .add_message::<PlayAnimation>()
+            // **Beside the chain rather than in it**: that tuple is at bevy's twenty-system
+            // ceiling, and this has one ordering that matters -- it must write its `EmoteAnim`
+            // before the one-shot player reads them, which `WorldStage::Net` already gives it.
+            .add_systems(Update, embedder_anim.in_set(WorldStage::Net))
             .add_message::<WoundAnim>()
             .add_message::<SheathSwapMessage>()
             .add_message::<SheathRequest>()
