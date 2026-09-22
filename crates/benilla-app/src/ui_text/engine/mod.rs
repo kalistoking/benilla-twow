@@ -1031,6 +1031,9 @@ pub(super) const TEST_FACES: &[&str] = CLIENT_FONTS;
 #[cfg(test)]
 mod differential_tests {
     use super::*;
+    // The trait behind `chain.lock_recover()`. Named here rather than at file scope because only
+    // these tests reach through the mutex directly -- everything else asks `WorldAssets`.
+    use benilla_assets::LockRecover;
 
     /// Real strings of the kinds that actually reach a measure: character names, item names,
     /// prose, the sequences a ligature table would target, the Latin-1 tail, and the digits the
@@ -1196,6 +1199,8 @@ mod differential_tests {
 #[cfg(test)]
 mod ppem_tests {
     use super::*;
+    // See the same import in `differential_tests`: these reach through the chain's mutex directly.
+    use benilla_assets::LockRecover;
 
     fn engine_or_skip() -> Option<TextEngine> {
         match test_engine(1.0) {

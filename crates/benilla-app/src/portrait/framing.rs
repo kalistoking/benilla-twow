@@ -880,17 +880,17 @@ mod tests {
         let reference_16_9 = diag_to_vert(1.0, REFERENCE_PANEL);
         assert!(close(reference_16_9, 0.490_26));
         assert!(close(
-            glue_scene_framing(1.0, REFERENCE_PANEL),
+            glue_scene_framing(1.0, REFERENCE_PANEL, None),
             reference_16_9
         ));
         assert!(glue_box_aspect(REFERENCE_PANEL).is_none());
         // Past it the width is HELD and the vertical keeps closing — a cover fit, never a bar and
         // never a stretch. The half-width is the same number at every ultra-wide aspect.
         let half_width = |vert: f32, a: f32| (vert * 0.5).tan() * a;
-        let held = half_width(glue_scene_framing(1.0, REFERENCE_PANEL), REFERENCE_PANEL);
+        let held = half_width(glue_scene_framing(1.0, REFERENCE_PANEL, None), REFERENCE_PANEL);
         let mut last = reference_16_9;
         for wide in [REFERENCE_PANEL, 2.0, 19.5 / 9.0, 3440.0 / 1440.0, 32.0 / 9.0] {
-            let vert = glue_scene_framing(1.0, wide);
+            let vert = glue_scene_framing(1.0, wide, None);
             assert!(
                 close(half_width(vert, wide), held),
                 "a{wide}: half-width {} vs {held}",
@@ -968,7 +968,7 @@ mod tests {
             // Past it: the width stays pinned at the frame's edge for every aspect, the vertical
             // pays for all of it, and nothing is boxed. One width, no scene of its own in it.
             for a in [REFERENCE_PANEL, 2.0, 19.5 / 9.0, 3440.0 / 1440.0, 32.0 / 9.0] {
-                let vert = glue_scene_framing(fov, a);
+                let vert = glue_scene_framing(fov, a, None);
                 assert!(
                     close(half_width(vert, a), GLUE_BOX_ASPECT * floor),
                     "fov {fov} a{a}: half-width {}",
@@ -976,7 +976,7 @@ mod tests {
                 );
                 assert!(glue_box_aspect(a).is_none(), "fov {fov} a{a} got bars");
                 // …and the vertical closes monotonically as the panel widens: a cover fit.
-                assert!(vert <= glue_scene_framing(fov, REFERENCE_PANEL) + 1e-6);
+                assert!(vert <= glue_scene_framing(fov, REFERENCE_PANEL, None) + 1e-6);
             }
             // The art no longer reaches the wide leg at all: a scene measured narrow and a scene
             // measured wide are framed identically. (`half_h` still binds the NARROW leg.)
