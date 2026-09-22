@@ -371,35 +371,34 @@ pub(super) fn control(
         *left_click = None;
         *right_click = None;
     }
-    // **Not ours while somebody else holds the camera.** The look session turns the eye and
-    // grabs the cursor to do it, and an embedder that says it authors the camera is doing
-    // both itself -- two grabbers of one pointer is a pointer belonging to neither. This is
-    // the state such a run was already in (the whole system stood down for it), so nothing
-    // that worked stops; what it costs is the world click the session also arms, which has
-    // never reached an embedder's free camera either.
-    if camera_is_ours {
-        run_look_session(
-            &buttons,
-            mouse_motion,
-            &touch_look,
-            both_buttons,
-            &mut rig,
-            &mut cam,
-            &mut player.face_yaw,
-            &mut window,
-            &mut opts_shadow,
-            inspect.enabled,
-            click_consumed.0,
-            &mut world_clicks.0,
-            &mut world_clicks.1,
-            &mut world_clicks.2,
-            left_click,
-            right_click,
-            look_cfg,
-            &dynamics,
-            time.elapsed_secs(),
-        );
-    }
+    // **The session runs whoever holds the camera; what it may DO with it is the argument.** It
+    // is two jobs under one name -- it decides clicks, and it turns the eye -- and only the second
+    // belongs to whoever owns the camera. Standing the whole thing down for an embedder is what
+    // left a free camera unable to select anything: *"klikám levým tlačítkem na jiné NPC a je
+    // stále označený Ralthas"* (the director, 2026-09-22). `camera_is_ours` now suppresses the
+    // rotation, the cursor grab and the facing hand-off, and nothing else.
+    run_look_session(
+        &buttons,
+        mouse_motion,
+        &touch_look,
+        both_buttons,
+        &mut rig,
+        &mut cam,
+        &mut player.face_yaw,
+        &mut window,
+        &mut opts_shadow,
+        inspect.enabled,
+        camera_is_ours,
+        click_consumed.0,
+        &mut world_clicks.0,
+        &mut world_clicks.1,
+        &mut world_clicks.2,
+        left_click,
+        right_click,
+        look_cfg,
+        &dynamics,
+        time.elapsed_secs(),
+    );
     // A stun freezes the BODY, not the view. The look session has already moved `cam.yaw` (and, on
     // a right-drag, coupled `face_yaw = cam.yaw`); putting the aim back leaves the camera orbiting
     // a body that does not turn — which is what a stunned character looks like, and what the

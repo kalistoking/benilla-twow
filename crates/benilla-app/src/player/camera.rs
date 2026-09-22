@@ -1101,6 +1101,13 @@ pub(super) fn run_look_session(
     window: &mut Window,
     cursor_opts: &mut CursorOptions,
     inspect_enabled: bool,
+    // **Whether this session may turn the eye**, as against merely deciding clicks. False for an
+    // embedder that authors the camera itself (`run_mode::CameraAuthoredElsewhere`), and then the
+    // rotation, the cursor grab and the facing hand-off all stand down while the press/release
+    // gesture keeps running -- because a look session is two jobs wearing one name, and only one
+    // of them belongs to whoever owns the camera. Standing the whole thing down instead is what
+    // left an embedder's free camera unable to select anything at all (trt, 2026-09-22).
+    turns_the_eye: bool,
     // A left press this frame the UI already consumed as a cursor-payload world drop (0216 §3) —
     // the left click test must yield to it exactly as it yields to a UI hover, so dropping a held
     // item never also selects.
@@ -1187,11 +1194,14 @@ pub(super) fn run_look_session(
                 rig.look = Some(other);
             } else {
                 rig.look = None;
-                cursor_opts.grab_mode = CursorGrabMode::None;
-                // Show the cursor again (cross-platform; on macOS hiding is the cursor subsystem's job).
-                cursor_opts.visible = true;
-                if let Some(pos) = rig.cursor_stash.take() {
-                    window.set_cursor_position(Some(pos));
+                if turns_the_eye {
+                    cursor_opts.grab_mode = CursorGrabMode::None;
+                    // Show the cursor again (cross-platform; on macOS hiding is the cursor
+                    // subsystem's job).
+                    cursor_opts.visible = true;
+                    if let Some(pos) = rig.cursor_stash.take() {
+                        window.set_cursor_position(Some(pos));
+                    }
                 }
             }
         }
@@ -1203,9 +1213,11 @@ pub(super) fn run_look_session(
         // chord is never a click).
         if rig.world_mouse.down(LookButton::Right) {
             rig.look = Some(LookButton::Right);
-            rig.cursor_stash = window.cursor_position();
-            cursor_opts.grab_mode = CursorGrabMode::Locked;
-            cursor_opts.visible = false;
+            if turns_the_eye {
+                rig.cursor_stash = window.cursor_position();
+                cursor_opts.grab_mode = CursorGrabMode::Locked;
+                cursor_opts.visible = false;
+            }
             *right_click =
                 (!rig.world_mouse.held(LookButton::Left)).then(|| PressGesture::new(now));
         } else if rig.world_mouse.down(LookButton::Left) && !inspect_enabled {
@@ -1214,9 +1226,11 @@ pub(super) fn run_look_session(
             // along and settles at the release. While the inspector is armed left belongs to it
             // (its own copy-on-click handler), so neither the orbit nor the test starts.
             rig.look = Some(LookButton::Left);
-            rig.cursor_stash = window.cursor_position();
-            cursor_opts.grab_mode = CursorGrabMode::Locked;
-            cursor_opts.visible = false;
+            if turns_the_eye {
+                rig.cursor_stash = window.cursor_position();
+                cursor_opts.grab_mode = CursorGrabMode::Locked;
+                cursor_opts.visible = false;
+            }
             // A press the UI already consumed as a cursor-payload world drop (0216 §3) still orbits
             // — the reference's orbit is unconditional on the down edge — but must not also select.
             *right_click = None;
@@ -1249,7 +1263,7 @@ pub(super) fn run_look_session(
             rig.look = None;
         }
     }
-    if let Some(active) = rig.look {
+    if let Some(active) = rig.look.filter(|_| turns_the_eye) {
         let delta = mouse_motion.delta + touch_look.delta;
         let d_yaw = -delta.x * yaw_rate;
         cam.yaw += d_yaw;
