@@ -72,10 +72,23 @@ pub(crate) fn player_drives_camera(
     capture.is_none() && embedder.is_none()
 }
 
-/// [`MovementAuthoredElsewhere`] as a run condition, so `control` can run for the wire's sake while
-/// the camera belongs to somebody else.
-pub(crate) fn movement_authored_elsewhere(replay: Option<Res<MovementAuthoredElsewhere>>) -> bool {
-    replay.is_some()
+/// **Whether the per-frame player controller runs at all**, and the answer is "unless a capture
+/// harness is pinning everything".
+///
+/// It used to be [`player_drives_camera`], and that was one question doing the work of three.
+/// `control` applies the wire's poses to our own mover, decides world clicks, poses and animates
+/// the body, AND seats the eye -- and only the last of those is the camera's. Gating the whole
+/// system on who owns the camera therefore took the other three away from any embedder that
+/// wanted to draw the scene its own way: first the poses (a replayed player frozen at her login
+/// position while a thousand of them went out), then, once that was noticed, the clicks (*"v
+/// kameře free flight při najetí na NPC se podsvítí, ale nefunguje vybrání"* -- the director,
+/// 2026-09-22, because the hover lives elsewhere and only the select was gone).
+///
+/// The camera's own jobs stand down inside `control` on [`CameraAuthoredElsewhere`], and the
+/// keyboard stands down on that or on [`MovementAuthoredElsewhere`]. A player build inserts
+/// neither resource, so every one of those reads as "yes, this is all mine" for free.
+pub(crate) fn controller_runs(capture: Option<Res<CaptureMode>>) -> bool {
+    capture.is_none()
 }
 
 /// The rig's derived character name (decision 0651), when `$WOW_RIG` names a body.

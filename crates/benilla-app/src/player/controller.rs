@@ -704,10 +704,18 @@ pub(super) fn control(
         if !may_translate {
             dir = Vec3::ZERO;
         }
-        // **And a replayed mover takes no direction from a keyboard.** Its path is on the wire
-        // and `apply_server_moves` above has already applied it; a key pressed now would be a
-        // second author of one body, and the recording is the one that measured something.
-        if replaying {
+        // **And this body takes no direction from a keyboard that is not driving it.**
+        //
+        // Two ways for that to be true, and they are different sentences. A *replayed* mover has
+        // its path on the wire, already applied by `apply_server_moves` above, so a key pressed
+        // now would be a second author of one body -- and the recording is the one that measured
+        // something. And when somebody else owns the *camera*, the keys are theirs: an embedder's
+        // free flight is flown with WASD, and without this the same press would fly the camera and
+        // walk the avatar out from under it.
+        //
+        // What survives both is the case the director liked and asked to keep: the client's own
+        // camera, the replay stopped, and her body walkable by hand.
+        if replaying || !camera_is_ours {
             dir = Vec3::ZERO;
         }
         let moving = dir != Vec3::ZERO;
