@@ -115,6 +115,13 @@ pub(super) fn control(
         // (`loading_screen::input`), so nothing new arrives here — but a mouse gesture already in
         // flight is retained state, and only its owner can unwind it. See the cancel below.
         Res<crate::loading_screen::LoadingScreen>,
+        // **Who authors this mover, and who authors the camera** -- two questions, deliberately
+        // two resources (see [`crate::run_mode::MovementAuthoredElsewhere`]). This system runs
+        // when either the player drives or a recording does, and these say which of its jobs are
+        // still its own: a recording takes the movement input away, an embedder's camera takes
+        // the seating and the look session.
+        Option<Res<crate::run_mode::MovementAuthoredElsewhere>>,
+        Option<Res<crate::run_mode::CameraAuthoredElsewhere>>,
     ),
     mut commands: Commands,
     mut player: ResMut<Player>,
@@ -176,6 +183,13 @@ pub(super) fn control(
     let self_guid = speed_capsule.7 .0;
     let scoped = &speed_capsule.8;
     let covered = speed_capsule.9.covering();
+    // **The recording wins** (trt's §9.1a): its poses are on the wire and the keyboard is not
+    // consulted about them. This says nothing about the camera -- see `camera_is_ours`.
+    let replaying = speed_capsule.10.is_some();
+    // Whether the eye is still this controller's to seat. False only for an embedder that said so,
+    // and then every camera job below stands down: the seat, the look session, and the cursor grab
+    // that goes with it. Two writers on one transform is the bug that made that resource exist.
+    let camera_is_ours = speed_capsule.11.is_none();
     // The auto-follow knobs (decisions 1493/1502), with far sight's one exception folded in here so
     // both camera seats below agree: while the rig orbits somebody ELSE's body (Mind Vision, Sentry
     // Totem), our own facing is not what "behind" means, so the return is forced off rather than
@@ -357,27 +371,35 @@ pub(super) fn control(
         *left_click = None;
         *right_click = None;
     }
-    run_look_session(
-        &buttons,
-        mouse_motion,
-        &touch_look,
-        both_buttons,
-        &mut rig,
-        &mut cam,
-        &mut player.face_yaw,
-        &mut window,
-        &mut opts_shadow,
-        inspect.enabled,
-        click_consumed.0,
-        &mut world_clicks.0,
-        &mut world_clicks.1,
-        &mut world_clicks.2,
-        left_click,
-        right_click,
-        look_cfg,
-        &dynamics,
-        time.elapsed_secs(),
-    );
+    // **Not ours while somebody else holds the camera.** The look session turns the eye and
+    // grabs the cursor to do it, and an embedder that says it authors the camera is doing
+    // both itself -- two grabbers of one pointer is a pointer belonging to neither. This is
+    // the state such a run was already in (the whole system stood down for it), so nothing
+    // that worked stops; what it costs is the world click the session also arms, which has
+    // never reached an embedder's free camera either.
+    if camera_is_ours {
+        run_look_session(
+            &buttons,
+            mouse_motion,
+            &touch_look,
+            both_buttons,
+            &mut rig,
+            &mut cam,
+            &mut player.face_yaw,
+            &mut window,
+            &mut opts_shadow,
+            inspect.enabled,
+            click_consumed.0,
+            &mut world_clicks.0,
+            &mut world_clicks.1,
+            &mut world_clicks.2,
+            left_click,
+            right_click,
+            look_cfg,
+            &dynamics,
+            time.elapsed_secs(),
+        );
+    }
     // A stun freezes the BODY, not the view. The look session has already moved `cam.yaw` (and, on
     // a right-drag, coupled `face_yaw = cam.yaw`); putting the aim back leaves the camera orbiting
     // a body that does not turn — which is what a stunned character looks like, and what the
@@ -534,35 +556,39 @@ pub(super) fn control(
             // states for exactly those (`Track`, `Fear`: a 0.4 s delay and a lazy 18 °/s return
             // under Smart). The word carries both flags, so the edge into and out of one of them
             // is what arms it.
-            camera::seat_on_subject(
-                dt,
-                0.0,
-                player.pos,
-                head,
-                body.single().ok().and_then(|(_, _, _, pivot, .., net)| {
-                    // Even while a spline/taxi/fear owns the body, the pivot preset follows
-                    // that body's own MOVEFLAG_SWIMMING (`0x50f880` reads the camera target's
-                    // CMovement word, not ours). On this path the controller builds no live
-                    // flag word, so the last-streamed one — which `wire_in` merges from the
-                    // server's own poses — is the body's state.
-                    body_pose::pivot_target(
-                        pivot,
-                        net,
-                        player.move_flags() & crate::creature_anim::move_flags::SWIMMING != 0,
-                    )
-                }),
-                view_subject,
-                &mut rig,
-                &mut cam,
-                &mut cam_t,
-                &collide,
-                &camera::FollowInput {
-                    cfg: follow_cfg,
-                    face_yaw: player.face_yaw,
-                    command: follow_command,
-                },
-                &dynamics,
-            );
+            // Guarded like its twin at the end of the driving path: an embedder that authors the
+            // camera authors it on every path, including this one.
+            if camera_is_ours {
+                camera::seat_on_subject(
+                    dt,
+                    0.0,
+                    player.pos,
+                    head,
+                    body.single().ok().and_then(|(_, _, _, pivot, .., net)| {
+                        // Even while a spline/taxi/fear owns the body, the pivot preset follows
+                        // that body's own MOVEFLAG_SWIMMING (`0x50f880` reads the camera target's
+                        // CMovement word, not ours). On this path the controller builds no live
+                        // flag word, so the last-streamed one — which `wire_in` merges from the
+                        // server's own poses — is the body's state.
+                        body_pose::pivot_target(
+                            pivot,
+                            net,
+                            player.move_flags() & crate::creature_anim::move_flags::SWIMMING != 0,
+                        )
+                    }),
+                    view_subject,
+                    &mut rig,
+                    &mut cam,
+                    &mut cam_t,
+                    &collide,
+                    &camera::FollowInput {
+                        cfg: follow_cfg,
+                        face_yaw: player.face_yaw,
+                        command: follow_command,
+                    },
+                    &dynamics,
+                );
+            }
             // Flush a stale run once, so observers stop extrapolating it — but never under a ride,
             // whose FORWARD report is deliberate and would be cancelled every frame.
             if !player.server_riding {
@@ -677,6 +703,12 @@ pub(super) fn control(
         // Block freezes completely while Frost Nova lets you turn. **Death is the third way this
         // predicate goes down** (1753), and unlike the root it takes the pivot with it.
         if !may_translate {
+            dir = Vec3::ZERO;
+        }
+        // **And a replayed mover takes no direction from a keyboard.** Its path is on the wire
+        // and `apply_server_moves` above has already applied it; a key pressed now would be a
+        // second author of one body, and the recording is the one that measured something.
+        if replaying {
             dir = Vec3::ZERO;
         }
         let moving = dir != Vec3::ZERO;
@@ -1019,6 +1051,11 @@ pub(super) fn control(
         // This frame's two move-flag words + the wire's fall clock ([`flags::this_frame`]): the
         // live word the wire and the local gates read, and the take-off-frozen one the animation
         // does. The arc bookkeeping (snapshot / FALLINGFAR / the landing edge) runs inside.
+        // **What the wire said this body was doing**, read before the rebuild below answers the
+        // same question from the keys. For a replayed mover this IS the answer: the recording's own
+        // `MOVEMENTFLAGS` rode every pose, and `merge_server_authored` put the direction, turn and
+        // walk bits into exactly this field.
+        let relayed = player.move_flags;
         let flags::FrameFlags {
             wire: move_flags_now,
             pose: pose_flags,
@@ -1040,6 +1077,34 @@ pub(super) fn control(
         // The rendered body heading + the animation's view of the flags — the display-facing law
         // lives in [`gait::drive_body_heading`] (strafe offset ease / moving snap / the standing
         // FROZEN chase whose body-step latches the turn-in-place shuffle).
+        // **A replayed mover's word is the wire's, both of them**, and so are the two facts the
+        // heading law asks beside it: "is it travelling" and "is it steering". Taking those from
+        // the input while taking the flags from the wire would be half of each answer.
+        //
+        // The *wire* word has to come from the wire too, and that is not tidiness: it is the one
+        // the movement stream writes back into `player.move_flags` at the end of the frame. Left
+        // as the rebuild made it -- empty, off a keyboard nobody is touching -- it erases the
+        // relayed bits one frame after each pose, and poses are tens of frames apart. The body
+        // then stands still for the whole gap and takes one step when the next one lands, which
+        // is the report this came from: *"she moves correctly but does not animate correctly"*.
+        //
+        // Measured both ways on a real-time replay of one capture: **80 changes** in 53 seconds
+        // with the line as it stands, in runs of a second and more; **181** with this term left as
+        // `move_flags_now`, each relayed word dying about 18 ms -- one frame -- after it arrived.
+        let (move_flags_now, pose_flags, moving, steering) = if replaying {
+            super::move_trace::replayed_gait(relayed);
+            (
+                relayed,
+                relayed,
+                relayed & crate::creature_anim::move_flags::ANY_MOVE != 0,
+                relayed
+                    & (crate::creature_anim::move_flags::TURN_LEFT
+                        | crate::creature_anim::move_flags::TURN_RIGHT)
+                    != 0,
+            )
+        } else {
+            (move_flags_now, pose_flags, moving, turning || mouselook)
+        };
         let anim_flags = gait::drive_body_heading(
             &mut player,
             pose_flags,
@@ -1047,7 +1112,7 @@ pub(super) fn control(
             swimming,
             moving,
             airborne,
-            turning || mouselook,
+            steering,
             turn_rate,
         );
         // Write the frame onto the driven body — pose, `MovementState`, the counter-twist gap and
@@ -1123,20 +1188,25 @@ pub(super) fn control(
             face_yaw: player.face_yaw,
             command: follow_command,
         };
-        camera::seat_on_subject(
-            dt,
-            turn_delta,
-            player.pos,
-            head,
-            cam_pivot_target,
-            view_subject,
-            &mut rig,
-            &mut cam,
-            &mut cam_t,
-            &collide,
-            &follow,
-            &dynamics,
-        );
+        // Only while the eye is still ours. Everything above this line has already happened --
+        // the wire's pose applied, the body posed and animated. What is skipped is the
+        // *seating*, which is the one job an embedder took.
+        if camera_is_ours {
+            camera::seat_on_subject(
+                dt,
+                turn_delta,
+                player.pos,
+                head,
+                cam_pivot_target,
+                view_subject,
+                &mut rig,
+                &mut cam,
+                &mut cam_t,
+                &collide,
+                &follow,
+                &dynamics,
+            );
+        }
 
         // The cast bar's local self-cancel trigger (`ui_cast::local_self_cancel`): a fresh
         // *directional* start (the same wire-axis edge the stream below turns into a

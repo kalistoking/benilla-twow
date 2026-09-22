@@ -373,7 +373,17 @@ impl Plugin for PlayerPlugin {
             control
                 .in_set(PlayerControlSet)
                 .in_set(WorldStage::Input)
-                .run_if(crate::run_mode::player_drives_camera)
+                // **Or a recording is driving the mover** — a different claim from the camera's,
+                // and it must not be answered by the camera's gate: this system is where
+                // `wire_in::apply_server_moves` is called from, so standing it down for the
+                // camera's sake stands the inbound pose down with it, and an embedder that took
+                // the camera found its replayed player frozen. See
+                // [`crate::run_mode::MovementAuthoredElsewhere`], which also tells the body below
+                // to ignore the keyboard and animate off the wire's own flags.
+                .run_if(
+                    crate::run_mode::player_drives_camera
+                        .or(crate::run_mode::movement_authored_elsewhere),
+                )
                 .in_set(crate::char_select::InWorldGated),
         )
         // The posture setter's queue (the `/sit` family — decision 0881; `control` is the sole

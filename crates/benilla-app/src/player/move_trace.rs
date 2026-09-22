@@ -120,6 +120,35 @@ pub(super) fn posture(what: &str, state: u8, from: u8, flags: u32) {
     );
 }
 
+/// One `rply` line per **change** in what a replayed mover was told it is doing
+/// ([`crate::run_mode::MovementAuthoredElsewhere`]).
+///
+/// Same argument as `sit` and `gait`: without it the mechanism is invisible from a live run. A
+/// replayed player walking her recorded path with her legs still and one walking it properly are
+/// the same picture from outside — the position comes off the wire either way, and only the *word*
+/// the animation was handed tells the two apart. Printed on change rather than per frame, because
+/// a walk is two thousand identical ones.
+pub(super) fn replayed_gait(relayed: u32) {
+    if !trace::enabled() {
+        return;
+    }
+    static LAST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(u32::MAX);
+    if LAST.swap(relayed, Ordering::Relaxed) == relayed {
+        return;
+    }
+    use crate::creature_anim::move_flags as f;
+    trace::line(
+        "rply",
+        &format!(
+            "wire={relayed:#x} moving={} turning={} walk={} swim={}",
+            u8::from(relayed & f::ANY_MOVE != 0),
+            u8::from(relayed & (f::TURN_LEFT | f::TURN_RIGHT) != 0),
+            u8::from(relayed & f::WALK_MODE != 0),
+            u8::from(relayed & f::SWIMMING != 0),
+        ),
+    );
+}
+
 /// One `gait` line per **walk/run toggle** decision, granted or refused (decision 1752).
 ///
 /// `what` is `commit` or `REFUSED`; `to` is the gait the press asked for, and the three flags are

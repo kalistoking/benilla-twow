@@ -45,6 +45,22 @@ pub(crate) struct CaptureMode;
 #[derive(Resource)]
 pub struct CameraAuthoredElsewhere;
 
+/// **A recording is authoring this mover's movement** — the poses are on the wire, and the keyboard
+/// is not to be consulted about them.
+///
+/// Kept apart from [`CameraAuthoredElsewhere`] because they are separate claims, and treating them
+/// as one cost an embedder a bug it could not reach from outside: `player::control` is where
+/// `wire_in::apply_server_moves` is *called from*, so gating that system on the camera gates the
+/// inbound pose with it. An embedder that took the camera found its replayed player **frozen** —
+/// every pose sent and applied by nobody — while one that handed the camera back got the poses and
+/// the keyboard driving the body over them.
+///
+/// With this set, `control` runs whoever holds the camera, takes **no** movement input, and
+/// animates from the flags the wire merged rather than from keys nobody is pressing. Inserted by
+/// trt (2026-09-22); a player build has no inserter and the resource never exists.
+#[derive(Resource)]
+pub struct MovementAuthoredElsewhere;
+
 /// Whether the PLAYER's own rig drives the camera and the avatar this run.
 ///
 /// The one predicate behind every camera gate, so "something else is driving" is answered in one
@@ -54,6 +70,12 @@ pub(crate) fn player_drives_camera(
     embedder: Option<Res<CameraAuthoredElsewhere>>,
 ) -> bool {
     capture.is_none() && embedder.is_none()
+}
+
+/// [`MovementAuthoredElsewhere`] as a run condition, so `control` can run for the wire's sake while
+/// the camera belongs to somebody else.
+pub(crate) fn movement_authored_elsewhere(replay: Option<Res<MovementAuthoredElsewhere>>) -> bool {
+    replay.is_some()
 }
 
 /// The rig's derived character name (decision 0651), when `$WOW_RIG` names a body.

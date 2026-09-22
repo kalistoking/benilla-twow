@@ -225,6 +225,11 @@ pub use ui_script::EguiPointerOver;
 /// Insert this when the embedder drives the world camera itself -- the client's own rig then
 /// stands down. See [`run_mode::CameraAuthoredElsewhere`].
 pub use run_mode::CameraAuthoredElsewhere;
+/// Insert this when a recording authors the player's movement -- the client applies the
+/// poses the wire hands it, takes no movement input, and animates from the flags those
+/// poses carried. A separate claim from the camera above, deliberately. See
+/// [`run_mode::MovementAuthoredElsewhere`].
+pub use run_mode::MovementAuthoredElsewhere;
 /// The write end of the client's inbound world channel, for an embedder that supplies the world
 /// itself. See [`net::WorldFeed`].
 pub use net::WorldFeed;
