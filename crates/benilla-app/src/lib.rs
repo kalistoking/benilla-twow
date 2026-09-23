@@ -249,6 +249,14 @@ pub use benilla_protocol::{ObjectFields, ObjectType};
 /// vocabulary and for the same reason — an embedder that supplies the world has to be able to
 /// say what happened in it.
 pub use benilla_protocol::messages::{AttackerState, PartyKillLog, SpellDamageLog};
+/// The periodic half of the same story: a DoT burning, a HoT healing, a drain moving mana.
+///
+/// Its own line because it arrived later and for a reason worth recording: an embedder replaying
+/// a fight from a capture wrote every direct hit and **no tick at all**, so half of every combat
+/// log was missing -- the reference client's `"%s suffers %d Fire damage from your %s."` had
+/// nothing on the other side. The handler was here the whole time; the vocabulary to reach it
+/// was not.
+pub use benilla_protocol::messages::{PeriodicAuraLog, PeriodicTick};
 pub use benilla_protocol::messages::ChatMessage;
 /// A full item-template answer — what an embedder fills when it knows what one of a unit's worn
 /// items IS. `Default` is there for exactly that case: a host that resolves an item's look from a
