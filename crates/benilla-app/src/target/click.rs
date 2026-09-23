@@ -146,6 +146,8 @@ pub(super) fn select_on_click(
     // [`scan::commit`]. Read live rather than latched with the press pick: the reference resolves
     // the object at the *commit*, not at the down edge.
     stores: Query<&ObjectStore>,
+    // A host's ground pick owns the click the same way ([`super::host_pick`]).
+    host_pick: Option<Res<super::host_pick::HostGroundPick>>,
 ) {
     let (hovered, occlusion) = (press.hovered, press.occlusion);
     // Drain the frame's clicks; act only if there was one and the inspector isn't holding left-click.
@@ -157,7 +159,7 @@ pub(super) fn select_on_click(
     // the ground commit BEFORE its select/deselect half and skips it when the commit fires
     // (`0x492580`'s "otherwise"). The commit system runs after this one in the chain, so the
     // mode is still readable here — selection changes not at all, in range or out.
-    if ground.active() {
+    if ground.active() || host_pick.is_some() {
         return;
     }
     let (self_guid, engaged) = self_q

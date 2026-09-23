@@ -106,29 +106,43 @@ pub(super) fn update_reticle(
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     decals: WorldDecal,
     mut state: ResMut<ReticleState>,
+    // A host's ground pick draws the same mark at its own radius, always acceptable — a host's
+    // pick has no spell to be out of range of ([`super::host_pick`]).
+    host: Option<Res<super::host_pick::HostGroundPick>>,
 ) {
     let state = &mut *state;
-    let (Some(spell_id), Some(point)) = (
-        targeting.spell_for(TargetingWants::Location),
-        occlusion.point,
-    ) else {
-        // Not targeting, targeting a word that wants no location, or the pick hit nothing (sky):
-        // nothing is drawn — the ref resets the draw state on every hover pass before the pick.
-        state.shown = false;
-        return;
-    };
-    let acceptable = !cursor.unable;
-    // Out of range forces radius 0.0 (the ref writes the global before the state fork), and a
-    // zero radius draws at the literal default.
-    let radius = if acceptable {
-        let level = self_store
-            .single()
-            .ok()
-            .and_then(|s| s.0.unit_level())
-            .unwrap_or(1);
-        ground_cast_radius(spells.as_deref(), spell_id, level)
-    } else {
-        0.0
+    let host_mark = host
+        .as_deref()
+        .zip(occlusion.point)
+        .map(|(h, point)| (h.radius, true, point));
+    let (radius, acceptable, point) = match host_mark {
+        Some(mark) => mark,
+        None => {
+            let (Some(spell_id), Some(point)) = (
+                targeting.spell_for(TargetingWants::Location),
+                occlusion.point,
+            ) else {
+                // Not targeting, targeting a word that wants no location, or the pick hit nothing
+                // (sky): nothing is drawn — the ref resets the draw state on every hover pass
+                // before the pick.
+                state.shown = false;
+                return;
+            };
+            let acceptable = !cursor.unable;
+            // Out of range forces radius 0.0 (the ref writes the global before the state fork),
+            // and a zero radius draws at the literal default.
+            let radius = if acceptable {
+                let level = self_store
+                    .single()
+                    .ok()
+                    .and_then(|s| s.0.unit_level())
+                    .unwrap_or(1);
+                ground_cast_radius(spells.as_deref(), spell_id, level)
+            } else {
+                0.0
+            };
+            (radius, acceptable, point)
+        }
     };
     let radius = if radius > 0.0 {
         radius

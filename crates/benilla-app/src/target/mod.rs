@@ -87,6 +87,9 @@ pub(crate) fn hover_probe_armed() -> bool {
 pub(crate) mod lock;
 mod relations;
 mod reticle;
+/// A host's ground pick — the reticle without a spell. See [`host_pick`].
+mod host_pick;
+pub use host_pick::{HostGroundPick, HostGroundPicked};
 // `pub(crate)` for the same reason as `cursor_mode`: the faction catalog is one of
 // [`cursor_mode::go_highlightable`]'s three inputs, so the inspector needs it to run the real gate.
 pub(crate) mod ring;
@@ -437,6 +440,7 @@ impl Plugin for TargetPlugin {
             .init_resource::<scan::TabHistory>()
             .init_resource::<scan::LastEnemy>()
             .add_message::<AttackNearestRequest>()
+            .add_message::<HostGroundPicked>()
             .add_message::<TargetByNameRequest>()
             .add_message::<AssistRequest>()
             .add_message::<click::DeselectGuid>()
@@ -467,7 +471,10 @@ impl Plugin for TargetPlugin {
                     // The right button's down-edge cancel first (the ref's OnMouseDown hook,
                     // 0792): the frame the press lands, the cursor drive below already reads
                     // the mode cleared and the classifier's verdict stands.
-                    crate::ui_action::targeting::cancel_targeting_on_right_press,
+                    (
+                        crate::ui_action::targeting::cancel_targeting_on_right_press,
+                        host_pick::cancel_host_pick_on_right_press,
+                    ),
                     // The ground-targeting pre-empt (decision 0792): overwrites the classifier's
                     // verdict while the targeting cursor is up — the ref's dispatcher runs this
                     // branch before the object classifier; last-writer-wins reads the same.
@@ -484,7 +491,10 @@ impl Plugin for TargetPlugin {
                     // world legs are siblings, not a fallback chain — the pending spell's word
                     // decides which of them a click can even feed (decision 0939), so their order
                     // relative to each other never matters.
-                    crate::ui_action::targeting::commit_ground_cast_on_click,
+                    (
+                        crate::ui_action::targeting::commit_ground_cast_on_click,
+                        host_pick::commit_host_pick_on_click,
+                    ),
                     crate::ui_action::targeting::commit_object_cast_on_click,
                     click::act_on_right_click,
                     click::clear_target_requests,
