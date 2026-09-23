@@ -594,12 +594,23 @@ fn apply_roster_policy(
 }
 
 /// `Connected` (bridged as [`EnteredWorldMessage`]) → the world owns the session.
+///
+/// **`set_if_neq`, not `set`.** Bevy's `set` runs `OnExit`/`OnEnter` even when the target is the
+/// state already current, and an embedder that starts the app `InWorld` (`GamePlugins::start`,
+/// trt replaying a capture) and then announces its session with `Connected` got exactly that
+/// identity transition: the whole logout tail -- saved variables written, the VM torn down,
+/// [`crate::ui_chat`]'s session end indexing a `ChatFrame1` the fresh VM does not have yet -- and
+/// the in-game UI loaded a second time behind a loading screen. A real session is untouched:
+/// `Connected` only ever arrives from `CharSelect` or `Login`, since a lost session goes back to
+/// `Login` first ([`back_on_disconnect`]).
 fn enter_on_connected(
     mut msgs: MessageReader<EnteredWorldMessage>,
     mut next: ResMut<NextState<ClientState>>,
 ) {
     if msgs.read().next().is_some() {
-        next.set(ClientState::InWorld);
+        // Spelled out: `next.set_if_neq` would resolve to `ResMut`'s change-detection method of
+        // the same name, which compares the whole `NextState` rather than the state.
+        NextState::set_if_neq(&mut *next, ClientState::InWorld);
     }
 }
 
@@ -1210,6 +1221,41 @@ mod tests {
     /// The guard is the *ordering*, which nothing else can catch: each system is correct alone, the
     /// build is green either way, and the failure needs two logins racing on one account to
     /// reproduce by hand.
+    /// **An embedder already in the world is not logged out and in again by its own `Connected`.**
+    ///
+    /// trt starts the app `InWorld` and then says `Connected`; a plain `set` made that an identity
+    /// transition and every `OnExit(InWorld)` ran -- the saved variables written, the chat windows
+    /// cleared on a VM with none, the UI loaded twice.
+    #[test]
+    fn connected_while_already_in_world_is_not_a_second_entry() {
+        #[derive(Resource, Default)]
+        struct Left(u32);
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .insert_state(ClientState::InWorld)
+            .init_resource::<Left>()
+            .add_message::<EnteredWorldMessage>()
+            .add_systems(Update, enter_on_connected)
+            .add_systems(OnExit(ClientState::InWorld), |mut left: ResMut<Left>| {
+                left.0 += 1;
+            });
+        app.world_mut().write_message(EnteredWorldMessage {
+            billing_time_rested: 0,
+            tutorial_flags: None,
+        });
+        app.update();
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<ClientState>>().get(),
+            ClientState::InWorld
+        );
+        assert_eq!(
+            app.world().resource::<Left>().0,
+            0,
+            "no logout tail for a world that was never left"
+        );
+    }
+
     #[test]
     fn a_session_lost_during_entry_beats_the_entry() {
         let mut app = App::new();
