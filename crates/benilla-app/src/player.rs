@@ -415,7 +415,11 @@ impl Plugin for PlayerPlugin {
         // different character). Ungated — the message lands as the state flips.
         .add_systems(
             Update,
-            wire_in::release_on_session_end.in_set(WorldStage::Input),
+            (
+                wire_in::release_on_session_end,
+                wire_in::forget_predictions_on_restate,
+            )
+                .in_set(WorldStage::Input),
         )
         // Which body the client drives at all (decision 1277). Strictly before everything that
         // reads the marker — the controller, and the collision-height mirror below.

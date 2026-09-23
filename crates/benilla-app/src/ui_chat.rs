@@ -219,6 +219,8 @@ impl Plugin for UiChatPlugin {
                 (
                     // The AFK mirror's reconcile runs FIRST in the chain, so a `/afk` typed this
                     // frame reads the descriptor's settled state rather than racing it (2088).
+                    // A restate of the self re-seeds it first (`crate::net::ObjectRestated`).
+                    away::forget_afk_prediction_on_restate,
                     away::reconcile_afk_mirror,
                     // …and the four movement clears, which share the CVar and the mirror.
                     away::movement_clears_afk,

@@ -717,6 +717,70 @@ pub(super) fn release_on_session_end(
     }
 }
 
+/// **A restate of our own body answers the stand-state prediction** (`crate::net::ObjectRestated`).
+///
+/// `stand_pending` is the client's commit ahead of an echo: `/kneel`, `/sit` and the idle
+/// auto-sit set it and wait for `UNIT_FIELD_BYTES_1` to come back equal. A whole CREATE of the
+/// self is the server saying what her stand byte IS, so the question the prediction was waiting
+/// on has been answered -- whichever value it carries -- and the descriptor is the state again.
+///
+/// With no server behind the client (an embedder replaying a capture), no echo ever arrives, and
+/// before this a kneel outlived every restate the embedder sent.
+pub(super) fn forget_predictions_on_restate(
+    mut restated: MessageReader<crate::net::ObjectRestated>,
+    self_q: Query<(), With<crate::net::SelfPlayer>>,
+    mut player: ResMut<Player>,
+) {
+    if restated.read().any(|m| self_q.contains(m.entity)) && player.stand_pending.is_some() {
+        debug!(
+            "player: restated whole -- the pending stand state {:?} is answered",
+            player.stand_pending
+        );
+        player.stand_pending = None;
+    }
+}
+
+#[cfg(test)]
+mod restate_tests {
+    use super::*;
+    use crate::net::{ObjectRestated, SelfPlayer};
+
+    fn harness() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Player>()
+            .add_message::<ObjectRestated>()
+            .add_systems(Update, forget_predictions_on_restate);
+        app
+    }
+
+    /// **A restate of our own body answers a kneel nothing will ever echo.** An embedder with no
+    /// server restates the recording's player on every seek; before this, `/kneel` set a pending
+    /// 8 that no restate could clear, because the prediction wins until the descriptor EQUALS it.
+    #[test]
+    fn a_restate_of_the_self_forgets_the_pending_stand_state() {
+        let mut app = harness();
+        let me = app.world_mut().spawn(SelfPlayer).id();
+        app.world_mut().resource_mut::<Player>().stand_pending = Some(8);
+        app.world_mut()
+            .write_message(ObjectRestated { entity: me, guid: 8 });
+        app.update();
+        assert_eq!(app.world().resource::<Player>().stand_pending, None);
+    }
+
+    /// And only OUR body: a creature restated beside her says nothing about her posture.
+    #[test]
+    fn a_restate_of_somebody_else_leaves_it_alone() {
+        let mut app = harness();
+        let other = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<Player>().stand_pending = Some(8);
+        app.world_mut()
+            .write_message(ObjectRestated { entity: other, guid: 11 });
+        app.update();
+        assert_eq!(app.world().resource::<Player>().stand_pending, Some(8));
+    }
+}
+
 #[cfg(test)]
 mod session_end_tests {
     use super::*;

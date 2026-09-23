@@ -246,6 +246,24 @@ pub(crate) struct AfkMirrorMemo(Option<u32>);
 ///
 /// The value written is `flags & 0x2` — so **`2`, not `1`** — which is exactly why [`AfkMirror`]
 /// is a `u32` tested for non-zero and never compared against `1` (§8's stated encoding hazard).
+/// **A restate of our own body re-seeds the AFK mirror** (`crate::net::ObjectRestated`).
+///
+/// The mirror leads `PLAYER_FLAGS` by one round trip, and its reconcile re-writes it only at world
+/// enter (memo `None`) or when the AFK/DND/GM bits CHANGE. A whole CREATE of the self can restate
+/// the flags to a value the memo already holds, so the delta arm never fires and a mirror raised
+/// by the idle handler would stand forever. Forgetting the memo sends the next reconcile down its
+/// world-enter arm, which seeds from the restated flags outright -- the reference's own corrector,
+/// not a new write.
+pub(crate) fn forget_afk_prediction_on_restate(
+    mut restated: MessageReader<crate::net::ObjectRestated>,
+    self_q: Query<(), With<crate::net::SelfPlayer>>,
+    mut memo: ResMut<AfkMirrorMemo>,
+) {
+    if restated.read().any(|m| self_q.contains(m.entity)) {
+        memo.0 = None;
+    }
+}
+
 pub(crate) fn reconcile_afk_mirror(
     self_q: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
     mut mirror: ResMut<AfkMirror>,

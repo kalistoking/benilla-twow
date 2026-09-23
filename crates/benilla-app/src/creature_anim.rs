@@ -865,6 +865,25 @@ mod driver;
 pub(crate) use driver::oneshot_is_live;
 use driver::{drive_animations, drive_hand_grip};
 
+/// **A restated unit's sheath cache is re-seeded from its descriptor** (`crate::net::ObjectRestated`).
+///
+/// `sheath_cur` is the client's committed sheath, ahead of the server's byte: a `/kneel` stows the
+/// weapon through it, and it re-adopts the descriptor only when the BYTES_2 byte CHANGES. A whole
+/// CREATE can restate the byte to the value the driver last saw, so nothing would ever move it back.
+/// Forgetting both makes the driver seed from the restated byte on its next pass, exactly as it
+/// does at first sight.
+fn reseed_sheath_on_restate(
+    mut restated: MessageReader<crate::net::ObjectRestated>,
+    mut drivers: Query<&mut AnimDriver>,
+) {
+    for m in restated.read() {
+        if let Ok(mut driver) = drivers.get_mut(m.entity) {
+            driver.sheath_cur = None;
+            driver.sheath_byte = None;
+        }
+    }
+}
+
 /// The model event-keyframe scanner (decision 0070 slice 3) — kept in its own file as its own
 /// small concern, separate from the driver ([`driver`]) that advances the clips it scans.
 mod events;
@@ -1233,6 +1252,9 @@ impl Plugin for CreatureAnimPlugin {
             // ceiling, and this has one ordering that matters -- it must write its `EmoteAnim`
             // before the one-shot player reads them, which `WorldStage::Net` already gives it.
             .add_systems(Update, embedder_anim.in_set(WorldStage::Net))
+            // A restated unit re-adopts its descriptor sheath byte before the driver reads it
+            // (`crate::net::ObjectRestated`).
+            .add_systems(Update, reseed_sheath_on_restate.before(drive_animations))
             .add_message::<WoundAnim>()
             .add_message::<SheathSwapMessage>()
             .add_message::<SheathRequest>()

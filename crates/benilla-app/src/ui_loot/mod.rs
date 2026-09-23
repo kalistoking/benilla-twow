@@ -630,10 +630,26 @@ pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut loot: ResMut<LootCo
     }
 }
 
+/// **A restate of our own body lets go of the loot latch** (`crate::net::ObjectRestated`).
+///
+/// The latch is the client's own kneel-at-a-chest, armed by the click ahead of any server word
+/// about the loot. A whole CREATE of the self is the server saying what she is doing, and it says
+/// nothing about kneeling over a chest.
+fn forget_loot_latch_on_restate(
+    mut restated: MessageReader<crate::net::ObjectRestated>,
+    self_q: Query<(), With<crate::net::SelfPlayer>>,
+    mut latch: ResMut<LootLatch>,
+) {
+    if restated.read().any(|m| self_q.contains(m.entity)) {
+        latch.0 = None;
+    }
+}
+
 impl Plugin for UiLootPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
         app.add_observer(on_cvar);
+        app.add_systems(Update, forget_loot_latch_on_restate);
         app.init_resource::<LootState>()
             .init_resource::<LootConfig>()
             .init_resource::<LootLatch>()

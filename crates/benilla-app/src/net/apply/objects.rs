@@ -246,6 +246,13 @@ pub(super) fn object_create(
         // Overlay the fresh snapshot's descriptor fields onto the existing store — the reference's
         // in-place refresh of a live guid, which notifies its field watchers like any delta.
         merge_fields(stores, pending, edges, e, guid, fields);
+        // **And say so** (the embedder's restate seam, `crate::net::ObjectRestated`): a restate
+        // answers every prediction the client was holding about this object. Queued rather than
+        // threaded through this signature -- it lands after the merge, which is the order its
+        // readers need.
+        commands.queue(move |world: &mut bevy::ecs::world::World| {
+            world.write_message(crate::net::ObjectRestated { entity: e, guid });
+        });
     } else {
         // A transport spawns hidden: its create pose is the *stationary* spawn point (or worse,
         // the origin), not where the boat is in its cycle — the transport tick unhides it at the

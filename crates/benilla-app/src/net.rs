@@ -121,6 +121,7 @@ impl Plugin for NetPlugin {
             .init_resource::<crate::world_state::WorldStates>()
             .add_message::<TeleportMessage>()
             .add_message::<FieldChanged>()
+            .add_message::<ObjectRestated>()
             .add_message::<SelfMoveMessage>()
             .add_message::<SpeedChangeMessage>()
             .add_message::<ClientControlMessage>()
@@ -311,6 +312,27 @@ pub(crate) struct ObjectStore(pub(crate) ObjectFields);
 /// `kind` is the store's own class off its create block: a raw index means different things per
 /// class (`36` is a unit's `BYTES_0` and a corpse's `DYNAMIC_FLAGS`), and a unit-field watcher
 /// must accept both `Unit` and `Player` ([`Self::unit_field`]).
+/// **An object was restated whole, in place** -- a CREATE for a guid that is already live.
+///
+/// The law this carries: *an in-place CREATE restates the object whole, and the client's own
+/// predictions about it do not survive it.* A prediction is a value the client committed ahead
+/// of a server echo -- the self's pending stand state, the AFK mirror, the sheath cache, the loot
+/// latch -- and each is corrected, in a live session, by the echo that confirms it. A restate is
+/// the server saying what the object IS; a prediction still waiting on an older question is
+/// answered by it, and keeping it would let the client's guess outrank the server's statement.
+///
+/// Opened for an embedder (trt) that restates the recording's own player on every seek. With no
+/// server behind it, a `/kneel` or an idle auto-sit is a prediction nothing will ever echo, and
+/// it outlived every seek until this.
+///
+/// **A new self-prediction belongs behind a reader of this**, or it will outlive a restate the
+/// same way.
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ObjectRestated {
+    pub entity: Entity,
+    pub guid: u64,
+}
+
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FieldChanged {
     pub entity: Entity,
