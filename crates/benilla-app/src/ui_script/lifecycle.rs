@@ -523,15 +523,31 @@ pub(crate) fn load_ingame_ui_on_world_entry(world: &mut World) {
     // streams in and is replaced when it does; the record outlives every push. Seeded here because
     // our VM is rebuilt per login (1290) while the reference's record simply persists, so each new
     // VM has to be told once — before the addon walk, like the realm.
+    //
+    // **An embedder's character when there is no pick** ([`EmbeddedCharacter`]). A client with no
+    // server and no character screen -- trt, replaying a capture -- has no roster row, and every
+    // addon's file scope then ran under a `UnitClass("player")` of nil: `Turtle_TransmogUI.lua`
+    // and `Turtle_ShopUI.lua` stop on `strlower` of it and put an error dialog over the world.
+    let embedded = world.get_resource::<EmbeddedCharacter>().cloned();
     if let Some(record) = world
         .get_resource::<crate::char_select::Roster>()
         .and_then(record_from_roster)
+        .or_else(|| {
+            embedded
+                .as_ref()
+                .map(|c| record_of(&c.name, c.race, c.class, c.gender))
+        })
     {
         script.set_player_record(record);
     }
     if let Some(seat) = world
         .get_resource::<crate::char_select::Roster>()
         .and_then(seat_from_roster)
+        .or_else(|| {
+            embedded
+                .as_ref()
+                .map(|c| seat_of(&c.name, c.race, c.class, c.gender))
+        })
     {
         script.set_unit("player", Some(seat));
     }
@@ -709,14 +725,40 @@ pub(crate) fn record_from_roster(
     roster: &crate::char_select::Roster,
 ) -> Option<benilla_ui::script::PlayerRecord> {
     let row = roster.pending_row()?;
-    let race = crate::ui_unit::race_names(row.race);
-    let class = crate::ui_unit::class_names(row.class);
-    Some(benilla_ui::script::PlayerRecord {
-        name: row.name.clone(),
+    Some(record_of(&row.name, row.race, row.class, row.gender))
+}
+
+/// The record itself, from the four facts it is made of -- shared by the roster's pick and an
+/// [`EmbeddedCharacter`], so the two cannot come to disagree about what race 4 is.
+fn record_of(name: &str, race: u8, class: u8, gender: u8) -> benilla_ui::script::PlayerRecord {
+    let race = crate::ui_unit::race_names(race);
+    let class = crate::ui_unit::class_names(class);
+    benilla_ui::script::PlayerRecord {
+        name: name.to_owned(),
         race: race.map(|(n, f)| (n.to_string(), f.to_string())),
         class: class.map(|(n, f)| (n.to_string(), f.to_string())),
-        sex: roster_sex(row.gender),
-    })
+        sex: roster_sex(gender),
+    }
+}
+
+/// **The character an embedder enters the world as, when there is no character screen.**
+///
+/// The roster's pick is where [`record_from_roster`] and [`seat_from_roster`] read the local
+/// player's name, race, class and gender before the UI loads -- the copy of the char-enum row the
+/// reference keeps from the Enter World commit. A client driven without a server has no roster,
+/// and this is the same four facts handed over directly: what a `SMSG_CHAR_ENUM` row would have
+/// said, which an embedder reads off the player's own CREATE block (`UNIT_FIELD_BYTES_0`).
+///
+/// Consulted only when the roster has no pick, so a real session is untouched by it.
+#[derive(Resource, Clone, Debug, PartialEq, Eq)]
+pub struct EmbeddedCharacter {
+    pub name: String,
+    /// `ChrRaces.dbc` id.
+    pub race: u8,
+    /// `ChrClasses.dbc` id.
+    pub class: u8,
+    /// 0 male, 1 female -- the wire's, as on a roster row.
+    pub gender: u8,
 }
 
 /// The `"player"` snapshot the UI loads **under**, built from the roster row of the pick in
@@ -750,10 +792,15 @@ pub(crate) fn seat_from_roster(
     roster: &crate::char_select::Roster,
 ) -> Option<benilla_ui::script::UnitState> {
     let row = roster.pending_row()?;
-    let race = crate::ui_unit::race_names(row.race);
-    let class = crate::ui_unit::class_names(row.class);
-    let sex = roster_sex(row.gender);
-    Some(benilla_ui::script::UnitState {
+    Some(seat_of(&row.name, row.race, row.class, row.gender))
+}
+
+/// The seat itself, from the four facts it is made of -- see [`record_of`].
+fn seat_of(name: &str, race_id: u8, class: u8, gender: u8) -> benilla_ui::script::UnitState {
+    let race = crate::ui_unit::race_names(race_id);
+    let class = crate::ui_unit::class_names(class);
+    let sex = roster_sex(gender);
+    benilla_ui::script::UnitState {
         // **`exists` is FALSE, and the level is 0 — the reference's answers, byte-verified**
         // (decision 2263). `UnitExists("player")` `0x515fb0` has no fast path: it resolves the
         // token, and the resolver reads the GUID out of the OBJECT (`0x515994`), not out of
@@ -771,7 +818,7 @@ pub(crate) fn seat_from_roster(
         // is the handful of fields the corpus reads at file scope that are neither the record's
         // nor the descriptor's to say yet, the faction side below chief among them.
         exists: false,
-        name: Some(row.name.clone()),
+        name: Some(name.to_owned()),
         race: race.map(|(n, _)| n.to_string()),
         race_file: race.map(|(_, f)| f.to_string()),
         class: class.map(|(n, _)| n.to_string()),
@@ -782,9 +829,9 @@ pub(crate) fn seat_from_roster(
         player_controlled: true,
         // Nil here is not "no faction", it is a state a player character cannot be in, and
         // AceDB-2.0 concatenates it at file scope — see [`crate::ui_unit::race_faction_group`].
-        faction_group: crate::ui_unit::race_faction_group(row.race).map(str::to_string),
+        faction_group: crate::ui_unit::race_faction_group(race_id).map(str::to_string),
         ..Default::default()
-    })
+    }
 }
 
 /// The character the loaded AddOn enable state belongs to, remembered so the shutdown write goes

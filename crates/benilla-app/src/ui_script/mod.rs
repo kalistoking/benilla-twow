@@ -48,6 +48,7 @@ mod session;
 pub(crate) mod gate;
 
 pub(crate) use session::VmMemo;
+pub use lifecycle::EmbeddedCharacter;
 
 // The manifest's loaders read as `ui_script::…` at every call site, including the tests' `super::`.
 // `load_default_ui` is no longer test-only: the addon harness (1188 phase 6) loads the whole

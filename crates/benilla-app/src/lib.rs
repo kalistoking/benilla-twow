@@ -222,6 +222,9 @@ pub use game_plugins::GamePlugins;
 /// The pointer arbitration an overlay writes: `true` while the pointer is over it, so the world
 /// below does not also act on the click. See [`ui_script::EguiPointerOver`].
 pub use ui_script::EguiPointerOver;
+/// The character an embedder enters the world as when there is no character screen -- the
+/// char-enum row's name, race, class and gender. See [`ui_script::EmbeddedCharacter`].
+pub use ui_script::EmbeddedCharacter;
 /// Insert this when the embedder drives the world camera itself -- the client's own rig then
 /// stands down. See [`run_mode::CameraAuthoredElsewhere`].
 pub use run_mode::CameraAuthoredElsewhere;
