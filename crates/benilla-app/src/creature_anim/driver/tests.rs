@@ -4438,3 +4438,149 @@ mod base_anim_lock {
         );
     }
 }
+
+/// The driver's harness, with a host's hold wired the way the plugin wires it: released units go
+/// back before the driver runs, held ones are played after it.
+fn app_with_host_pose() -> App {
+    let mut app = app();
+    app.add_systems(
+        Update,
+        (
+            crate::creature_anim::host_pose::release_host_pose.before(drive_animations),
+            crate::creature_anim::host_pose::drive_host_pose.after(drive_animations),
+        ),
+    );
+    app
+}
+
+fn a_held_caster(app: &mut App, pose: crate::creature_anim::HostPose) -> Entity {
+    app.world_mut()
+        .spawn((
+            caster_model(),
+            AnimationPlayer::default(),
+            AnimationTransitions::new(),
+            AnimDriver::default(),
+            pose,
+        ))
+        .id()
+}
+
+fn main_node(app: &App, unit: Entity) -> Option<AnimationNodeIndex> {
+    app.world()
+        .entity(unit)
+        .get::<AnimationTransitions>()
+        .unwrap()
+        .get_main_animation()
+}
+
+/// **A held unit is the host's, frame after frame.** Unengaged and standing, the driver's own pick
+/// is Stand (node 1); with a hold on the staff Ready idle (28, node 2) the driver must not take the
+/// body back on the next frame, or the next, which is the twitch two writers on one player make.
+#[test]
+fn a_host_pose_holds_the_body_against_the_drivers_own_pick() {
+    let mut app = app_with_host_pose();
+    let unit = a_held_caster(
+        &mut app,
+        crate::creature_anim::HostPose {
+            anim_id: 28,
+            repeat: true,
+            hold_at: None,
+            take: 1,
+        },
+    );
+    for _ in 0..5 {
+        app.update();
+        assert_eq!(main_node(&app, unit), Some(AnimationNodeIndex::new(2)));
+    }
+    let now = *app
+        .world()
+        .entity(unit)
+        .get::<crate::creature_anim::HostPoseNow>()
+        .expect("read back");
+    assert_eq!(now.resolved, Some(28));
+    assert!(!now.paused);
+}
+
+/// **A scrub holds the clip at the fraction asked, paused, and says so.**
+#[test]
+fn a_host_pose_held_at_a_fraction_is_paused_there() {
+    let mut app = app_with_host_pose();
+    let unit = a_held_caster(
+        &mut app,
+        crate::creature_anim::HostPose {
+            anim_id: 0,
+            repeat: false,
+            hold_at: Some(0.4),
+            take: 1,
+        },
+    );
+    app.update();
+    app.update();
+    let active = app
+        .world()
+        .entity(unit)
+        .get::<AnimationPlayer>()
+        .unwrap()
+        .animation(AnimationNodeIndex::new(1))
+        .expect("Stand is playing");
+    assert!(active.is_paused());
+    assert!((active.seek_time() - 0.4).abs() < 1e-4, "{}", active.seek_time());
+    let now = *app
+        .world()
+        .entity(unit)
+        .get::<crate::creature_anim::HostPoseNow>()
+        .unwrap();
+    assert!(now.paused);
+    assert!((now.fraction - 0.4).abs() < 1e-4);
+
+    // Dragged on: the same clip, held somewhere else -- not restarted, not released.
+    app.world_mut()
+        .entity_mut(unit)
+        .get_mut::<crate::creature_anim::HostPose>()
+        .unwrap()
+        .hold_at = Some(0.9);
+    app.update();
+    app.update();
+    let now = *app
+        .world()
+        .entity(unit)
+        .get::<crate::creature_anim::HostPoseNow>()
+        .unwrap();
+    assert!((now.fraction - 0.9).abs() < 1e-4, "{}", now.fraction);
+}
+
+/// **Removing the hold hands the unit back**: the driver re-selects from scratch and plays its
+/// own pick, and the read-back goes with the hold.
+#[test]
+fn a_released_host_pose_goes_back_to_the_driver() {
+    let mut app = app_with_host_pose();
+    let unit = a_held_caster(
+        &mut app,
+        crate::creature_anim::HostPose {
+            anim_id: 28,
+            repeat: true,
+            hold_at: None,
+            take: 1,
+        },
+    );
+    app.update();
+    app.update();
+    assert_eq!(main_node(&app, unit), Some(AnimationNodeIndex::new(2)));
+
+    app.world_mut()
+        .entity_mut(unit)
+        .remove::<crate::creature_anim::HostPose>();
+    app.update();
+    app.update();
+    assert_eq!(
+        main_node(&app, unit),
+        Some(AnimationNodeIndex::new(1)),
+        "an unengaged standing unit is back on Stand, the driver's own pick"
+    );
+    assert!(
+        app.world()
+            .entity(unit)
+            .get::<crate::creature_anim::HostPoseNow>()
+            .is_none()
+    );
+}

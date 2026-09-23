@@ -304,7 +304,11 @@ pub(super) fn drive_animations(
             // unit, which is the client's `+0x2c & 0x4` wound-flinch refusal (decision 2063).
             Option<&crate::aura_visual::AuraNodes>,
         ),
-    )>,
+        ),
+        // **A unit a host is holding is the host's** ([`super::HostPose`]): two writers on one
+        // player is a body that twitches between them every frame.
+        Without<super::HostPose>,
+    >,
     // A mount child's movement view is its HOST's (decision 0441): the same
     // MovementState/RemoteMotion/Spline/speeds the rider's `unify` reads, fetched through
     // `MountBody.host` — so the untouched gait machinery locomotes the mount for self, remote

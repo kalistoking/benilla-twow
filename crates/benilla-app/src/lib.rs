@@ -283,6 +283,8 @@ pub use target::EmbedderSelection;
 /// Play one animation on one unit — for a host that supplies the world and has a reason to show a
 /// sequence no packet carries. See [`creature_anim::PlayAnimation`].
 pub use creature_anim::PlayAnimation;
+/// A host's hold on a unit's body animation, and what it is doing — an embedder's bench.
+pub use creature_anim::{HostPose, HostPoseNow};
 /// What is selected, by server guid -- the read-back an embedder needs to learn that the person
 /// clicked something else. See [`Selection::guid`].
 pub use target::Selection;

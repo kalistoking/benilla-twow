@@ -737,6 +737,11 @@ pub struct PlayAnimation {
     pub anim_id: u16,
 }
 
+/// A host's hold on a unit's body animation — loop, hold at a frame, read back. See
+/// [`host_pose`].
+pub(crate) mod host_pose;
+pub use host_pose::{HostPose, HostPoseNow};
+
 /// [`PlayAnimation`] → [`EmoteAnim`]: the host's ask, stamped and handed to the one-shot player.
 ///
 /// The stamp is taken here rather than by the host, for the reason it is taken everywhere else: it
@@ -1255,6 +1260,15 @@ impl Plugin for CreatureAnimPlugin {
             // A restated unit re-adopts its descriptor sheath byte before the driver reads it
             // (`crate::net::ObjectRestated`).
             .add_systems(Update, reseed_sheath_on_restate.before(drive_animations))
+            // A host's hold (C9 in trt's terms): released units go back to the driver before it
+            // runs, held ones are played after it, which skipped them.
+            .add_systems(
+                Update,
+                (
+                    host_pose::release_host_pose.before(drive_animations),
+                    host_pose::drive_host_pose.after(drive_animations),
+                ),
+            )
             .add_message::<WoundAnim>()
             .add_message::<SheathSwapMessage>()
             .add_message::<SheathRequest>()
