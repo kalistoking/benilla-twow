@@ -119,6 +119,18 @@ pub(crate) struct CapturePointerPinned(pub(crate) bool);
 #[derive(Resource, Default)]
 pub struct EguiPointerOver(pub bool);
 
+/// **An embedder's own UI has the keyboard** -- the keyboard half of [`EguiPointerOver`].
+///
+/// A tool that draws its own text fields over the client (trt's panels) needs what a focused
+/// EditBox gets: every key its own, none of them a binding. Without it, typing a creature's name
+/// into trt opened the quest log on `L`, the talents on `N` and the world map on `M` (the
+/// director, 2026-09-24). Writing it is the whole contract -- `true` while the embedder's UI wants
+/// keyboard input -- and the UI pass then treats the frame exactly as it treats a focused box:
+/// [`UiKeyboardCapture::typing`] is raised, so every binding and world key reader stands down,
+/// and no key reaches the VM.
+#[derive(Resource, Default)]
+pub struct EmbedderKeyboard(pub bool);
+
 /// Whether mouseover **world picking** is armed — the dev-chord `I` inspector's mode, toggled by
 /// `debug_panel::inspect`.
 ///
@@ -472,6 +484,7 @@ impl Plugin for UiScriptPlugin {
                     || std::env::var_os("WOW_CAPTURE_UI").is_some(),
             ))
             .init_resource::<EguiPointerOver>()
+            .init_resource::<EmbedderKeyboard>()
             .init_resource::<InspectMode>()
             .init_resource::<PlayerUiHover>()
             .init_resource::<UiKeyboardCapture>()

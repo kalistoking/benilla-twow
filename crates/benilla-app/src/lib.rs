@@ -222,6 +222,8 @@ pub use game_plugins::GamePlugins;
 /// The pointer arbitration an overlay writes: `true` while the pointer is over it, so the world
 /// below does not also act on the click. See [`ui_script::EguiPointerOver`].
 pub use ui_script::EguiPointerOver;
+/// The keyboard half of it: an embedder's own text field has the keyboard this frame.
+pub use ui_script::EmbedderKeyboard;
 /// The character an embedder enters the world as when there is no character screen -- the
 /// char-enum row's name, race, class and gender. See [`ui_script::EmbeddedCharacter`].
 pub use ui_script::EmbeddedCharacter;

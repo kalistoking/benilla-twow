@@ -130,7 +130,17 @@ pub(crate) fn drive_targeting_cursor(
     // and not a permanent grey.
     lock_inputs: crate::target::lock::GoLockInputs,
     mut cursor: ResMut<WorldCursor>,
+    // A host's ground pick wears the same cursor as a spell's -- the one a person already reads as
+    // "click the ground" -- greyed only where there is no ground under it (the sky).
+    host: Option<Res<crate::target::HostGroundPick>>,
 ) {
+    if host.is_some() {
+        *cursor = WorldCursor {
+            kind: CursorKind::Cast,
+            unable: occlusion.point.is_none(),
+        };
+        return;
+    }
     let Some(spell_id) = targeting.spell() else {
         return;
     };

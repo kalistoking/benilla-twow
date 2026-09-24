@@ -97,10 +97,13 @@ pub(super) fn feed_ui_input(
         Res<ButtonInput<KeyCode>>,
         ResMut<UiKeyboardCapture>,
         NonSendMut<HostClipboard>,
+        // An embedder's own text field has the keyboard ([`super::EmbedderKeyboard`]).
+        Option<Res<super::EmbedderKeyboard>>,
     ),
     // The uiScale dial folded into the seam scale (decision 0584).
     ui_scale: Res<super::UiScaleCvar>,
 ) {
+    let embedder_typing = kbd.4.as_deref().is_some_and(|k| k.0);
     let (keyboard, keys, capture, clipboard) = (&mut kbd.0, &kbd.1, &mut kbd.2, &mut kbd.3);
     let world_pick = pointer.world_pick();
     let ui_hidden = pointer.hidden.0;
@@ -274,6 +277,15 @@ pub(super) fn feed_ui_input(
     capture.typing = script.has_keyboard_focus();
     // The per-key half is this frame's alone (a frame's existence gate ate THIS key).
     capture.consumed.clear();
+    // **An embedder's field has the keyboard: the whole frame is a focused box's, and the VM
+    // hears none of it** ([`super::EmbedderKeyboard`]). Raised before the key feed so no binding,
+    // no world key reader and no frame script sees a key typed into the embedder's panel.
+    if embedder_typing {
+        capture.typing = true;
+        capture.arrows_fall_through = false;
+        keyboard.clear();
+        return;
+    }
     // ── The alt-arrow exemption (wow-re `ignorearrows-alt-arrow-gate.md`, §5 VERIFIED) ─────────
     // A focused EditBox in alt-arrow mode (`ignoreArrows` in XML, `SetAltArrowKeyMode` in Lua)
     // does NOT consume LEFT/UP/RIGHT/DOWN unless ALT is held: the reference's handler returns 0
