@@ -76,6 +76,89 @@ pub(crate) struct NetPlugin {
 #[derive(Resource)]
 pub(crate) struct NetOffline;
 
+/// **What the player cast, while no server listens** -- for an embedder that plays the server
+/// itself (trt's script test mode). Written once for every cast the client commits, whichever way
+/// it was made -- the action bar, the spellbook, `/cast`, a click-to-cast, an item's use -- because
+/// every one of them ends as the one outbound command this is read from. Only offline: with a
+/// connection the command goes to the server as it always has, and nothing is written here.
+#[derive(Message, Clone, Debug, PartialEq)]
+pub enum HostCast {
+    /// A spell at a unit, or at none (itself, or no target: the server's to resolve).
+    Spell { spell_id: u32, target: Option<u64> },
+    /// A spell at a point on the ground, in WoW coordinates -- its destination, or (`source`) its
+    /// source location.
+    SpellAtPoint {
+        spell_id: u32,
+        point: [f32; 3],
+        source: bool,
+    },
+    /// A spell at a gameobject.
+    SpellAtObject { spell_id: u32, object: u64 },
+    /// A spell at an item.
+    SpellAtItem { spell_id: u32, item: u64 },
+    /// An item used from a bag: where it is, which of its spells, and at what.
+    Item {
+        bag_index: u8,
+        slot: u8,
+        spell_index: u8,
+        target: benilla_protocol::messages::UseItemTarget,
+    },
+}
+
+/// The cast an outbound command is, if it is one.
+fn host_cast(command: &ClientCommand) -> Option<HostCast> {
+    Some(match command {
+        ClientCommand::CastSpell { spell_id, target } => HostCast::Spell {
+            spell_id: *spell_id,
+            target: *target,
+        },
+        ClientCommand::CastSpellAtDest { spell_id, dest } => HostCast::SpellAtPoint {
+            spell_id: *spell_id,
+            point: *dest,
+            source: false,
+        },
+        ClientCommand::CastSpellAtSource { spell_id, src } => HostCast::SpellAtPoint {
+            spell_id: *spell_id,
+            point: *src,
+            source: true,
+        },
+        ClientCommand::CastSpellGameObject { spell_id, go_guid } => HostCast::SpellAtObject {
+            spell_id: *spell_id,
+            object: *go_guid,
+        },
+        ClientCommand::CastSpellItem { spell_id, item_guid } => HostCast::SpellAtItem {
+            spell_id: *spell_id,
+            item: *item_guid,
+        },
+        ClientCommand::UseItem {
+            bag_index,
+            slot,
+            spell_index,
+            target,
+        } => HostCast::Item {
+            bag_index: *bag_index,
+            slot: *slot,
+            spell_index: *spell_index,
+            target: target.clone(),
+        },
+        _ => return None,
+    })
+}
+
+/// The outbound commands no server reads (see [`io::NetHandles::offline`]).
+#[derive(Resource)]
+struct OfflineCommands(Receiver<ClientCommand>);
+
+/// Every command the frame sent, read: a cast written as a [`HostCast`], the rest dropped -- as
+/// they were before, when nothing held the other end.
+fn publish_host_casts(offline: Res<OfflineCommands>, mut casts: MessageWriter<HostCast>) {
+    for command in offline.0.try_iter() {
+        if let Some(cast) = host_cast(&command) {
+            casts.write(cast);
+        }
+    }
+}
+
 impl Plugin for NetPlugin {
     fn build(&self, app: &mut App) {
         // The one release-on-enter for the ask-once caches this plugin owns (decision 2288;
@@ -84,9 +167,17 @@ impl Plugin for NetPlugin {
         crate::query_cache::register::<crate::names::NameCache>(app);
         crate::query_cache::register::<crate::go_templates::GameObjectTemplates>(app);
         crate::query_cache::register::<crate::items::Items>(app);
-        let handles = io::spawn_net(io::NetConfig::from_env(), self.connect);
+        let mut handles = io::spawn_net(io::NetConfig::from_env(), self.connect);
+        // Registered either way, so an embedder can read it whether or not anything is written.
+        app.add_message::<HostCast>();
         if !self.connect {
             app.insert_resource(NetOffline);
+        }
+        if let Some(offline) = handles.offline.take() {
+            app.insert_resource(OfflineCommands(offline)).add_systems(
+                Update,
+                publish_host_casts.in_set(benilla_world::schedule::WorldStage::Net),
+            );
         }
         // In the wire-drain stage, because that is what it is the product of. The lighting
         // resolve is ordered after that stage so it always reads THIS frame's clock rather than
@@ -3204,5 +3295,111 @@ mod tests {
                 "{refused:#04x} is a lane the client never sends addon data on"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod host_cast_tests {
+    use super::*;
+    use benilla_protocol::messages::UseItemTarget;
+
+    /// **Every way a cast leaves the client is one `HostCast`** -- a spell at a unit, at a point
+    /// (destination or source), at an object, at an item, and an item used from a bag -- and a
+    /// command that is not a cast is none.
+    #[test]
+    fn every_cast_command_is_one_host_cast_and_nothing_else_is() {
+        let casts = [
+            ClientCommand::CastSpell {
+                spell_id: 133,
+                target: Some(7),
+            },
+            ClientCommand::CastSpellAtDest {
+                spell_id: 10,
+                dest: [1.0, 2.0, 3.0],
+            },
+            ClientCommand::CastSpellAtSource {
+                spell_id: 11,
+                src: [4.0, 5.0, 6.0],
+            },
+            ClientCommand::CastSpellGameObject {
+                spell_id: 12,
+                go_guid: 8,
+            },
+            ClientCommand::CastSpellItem {
+                spell_id: 13,
+                item_guid: 9,
+            },
+            ClientCommand::UseItem {
+                bag_index: 255,
+                slot: 23,
+                spell_index: 0,
+                target: UseItemTarget::SelfImplicit,
+            },
+        ];
+        let said: Vec<HostCast> = casts.iter().filter_map(host_cast).collect();
+        assert_eq!(said.len(), casts.len(), "{said:?}");
+        assert_eq!(
+            said[0],
+            HostCast::Spell {
+                spell_id: 133,
+                target: Some(7)
+            }
+        );
+        assert_eq!(
+            said[2],
+            HostCast::SpellAtPoint {
+                spell_id: 11,
+                point: [4.0, 5.0, 6.0],
+                source: true
+            }
+        );
+        assert!(matches!(said[5], HostCast::Item { slot: 23, .. }));
+        assert!(
+            host_cast(&ClientCommand::AttackStop).is_none(),
+            "not a cast"
+        );
+    }
+
+    /// **Offline, what the frame sent is read once**: the casts come out as messages, one each,
+    /// and the channel is empty after.
+    #[test]
+    fn offline_the_frames_casts_are_written_once() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut world = World::new();
+        world.init_resource::<Messages<HostCast>>();
+        world.insert_resource(OfflineCommands(rx));
+        let publish = world.register_system(publish_host_casts);
+        tx.send(ClientCommand::CastSpell {
+            spell_id: 133,
+            target: None,
+        })
+        .unwrap();
+        tx.send(ClientCommand::CastSpellGameObject {
+            spell_id: 3365,
+            go_guid: 26206,
+        })
+        .unwrap();
+        world.run_system(publish).expect("the drain runs");
+        let said: Vec<HostCast> = world.resource_mut::<Messages<HostCast>>().drain().collect();
+        assert_eq!(said.len(), 2, "{said:?}");
+        world.run_system(publish).expect("the drain runs again");
+        assert!(world
+            .resource_mut::<Messages<HostCast>>()
+            .drain()
+            .next()
+            .is_none());
+    }
+
+    /// **With a connection nothing changes**: the command receiver goes to the write thread as it
+    /// always has, and none is kept to read casts from. Offline, it is kept.
+    #[test]
+    fn with_a_connection_no_receiver_is_kept() {
+        let offline = io::spawn_net(io::NetConfig::from_env(), false);
+        assert!(offline.offline.is_some(), "offline, the embedder's to read");
+        let online = io::spawn_net(io::NetConfig::from_env(), true);
+        assert!(
+            online.offline.is_none(),
+            "connected, the server's -- as before"
+        );
     }
 }

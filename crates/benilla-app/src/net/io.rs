@@ -302,6 +302,11 @@ pub(super) struct NetHandles {
     pub(super) login: Sender<LoginRequest>,
     pub(super) login_abandon: Arc<AtomicU64>,
     pub(super) ping: Arc<Mutex<PingClock>>,
+    /// **The outbound commands, kept when nothing is connected** -- the read end the write thread
+    /// would own. `None` with a connection: then every command goes to the server exactly as
+    /// before. An embedder that plays the server reads what the player cast from here
+    /// ([`super::HostCast`]).
+    pub(super) offline: Option<Receiver<ClientCommand>>,
 }
 
 /// Spawn the background read thread (with its park/cycle loop) and the single long-lived write
@@ -318,7 +323,10 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
     let (login_tx, login_rx) = crossbeam_channel::unbounded::<LoginRequest>();
     let login_abandon = Arc::new(AtomicU64::new(0));
     let ping_clock = Arc::new(Mutex::new(PingClock::default()));
+    // Moved into the write thread when connecting; kept for the embedder when not.
+    let mut offline = Some(cmd_rx);
     if connect {
+        let cmd_rx = offline.take().expect("the command receiver, not yet handed on");
         // The writer thread outlives connections; the read thread hands it each new WorldWriter.
         let (writer_tx, writer_rx) = crossbeam_channel::unbounded::<WorldWriter>();
         let clock = Arc::clone(&ping_clock);
@@ -421,6 +429,7 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
         login: login_tx,
         login_abandon,
         ping: ping_clock,
+        offline,
     }
 }
 
