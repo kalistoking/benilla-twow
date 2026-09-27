@@ -41,10 +41,32 @@ pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut realmlist: ResMut<R
     }
 }
 
+/// **The realmlist an embedder pins** -- as `$WOW_HOST` does, and winning over it: the host every
+/// attempt dials, the login screen's control disabled, nothing written to `config.toml`. Inserted
+/// before [`crate::GamePlugins`] is added; an embedder that names the server it may talk to (trt's
+/// live mode, which must never dial anything but the machine's own) says so here rather than
+/// through the process environment.
+#[derive(Resource, Clone, Debug)]
+pub struct EmbedderRealmlist(pub String);
+
 impl Plugin for RealmlistPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_cvar);
-        app.init_resource::<Realmlist>();
+        let pinned = app
+            .world()
+            .get_resource::<EmbedderRealmlist>()
+            .map(|pin| Realmlist {
+                address: pin.0.clone(),
+                pinned_by_env: true,
+            });
+        match pinned {
+            Some(realmlist) => {
+                app.insert_resource(realmlist);
+            }
+            None => {
+                app.init_resource::<Realmlist>();
+            }
+        }
     }
 }
 
@@ -285,6 +307,18 @@ mod tests {
     }
 
     /// A pinned session refuses to be repointed — the harness guard.
+    #[test]
+    fn an_embedder_pinned_realmlist_is_dialed_and_ignores_writes() {
+        let mut app = App::new();
+        app.insert_resource(EmbedderRealmlist("127.0.0.1:3725".to_owned()));
+        RealmlistPlugin.build(&mut app);
+        let mut realmlist = app.world_mut().resource_mut::<Realmlist>();
+        assert_eq!(realmlist.address(), "127.0.0.1:3725");
+        assert!(realmlist.pinned_by_env());
+        realmlist.set("elsewhere.example.org");
+        assert_eq!(realmlist.address(), "127.0.0.1:3725");
+    }
+
     #[test]
     fn an_env_pinned_realmlist_ignores_writes() {
         let mut r = Realmlist {
