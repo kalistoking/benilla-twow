@@ -103,6 +103,10 @@ pub enum HostCast {
         spell_index: u8,
         target: benilla_protocol::messages::UseItemTarget,
     },
+    /// A gameobject used -- a lever pulled, a door or a button clicked (`CMSG_GAMEOBJ_USE`). Not a
+    /// cast on the wire, but the same kind of thing to a host that plays the server: what the
+    /// player did to the world, which the server would answer.
+    UseObject { object: u64 },
 }
 
 /// The cast an outbound command is, if it is one.
@@ -141,6 +145,7 @@ fn host_cast(command: &ClientCommand) -> Option<HostCast> {
             spell_index: *spell_index,
             target: target.clone(),
         },
+        ClientCommand::GameObjUse { guid } => HostCast::UseObject { object: *guid },
         _ => return None,
     })
 }
@@ -3357,6 +3362,16 @@ mod host_cast_tests {
         assert!(
             host_cast(&ClientCommand::AttackStop).is_none(),
             "not a cast"
+        );
+    }
+
+    /// **A gameobject used is heard too** -- a lever, a door -- by its guid, as the server's
+    /// `HandleGameObjectUseOpcode` would hear it.
+    #[test]
+    fn a_gameobject_used_is_a_host_cast() {
+        assert_eq!(
+            host_cast(&ClientCommand::GameObjUse { guid: 26188 }),
+            Some(HostCast::UseObject { object: 26188 })
         );
     }
 
