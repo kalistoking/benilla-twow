@@ -302,10 +302,10 @@ pub(super) struct NetHandles {
     pub(super) login: Sender<LoginRequest>,
     pub(super) login_abandon: Arc<AtomicU64>,
     pub(super) ping: Arc<Mutex<PingClock>>,
-    /// **The outbound commands, kept when nothing is connected** -- the read end the write thread
-    /// would own. `None` with a connection: then every command goes to the server exactly as
-    /// before. An embedder that plays the server reads what the player cast from here
-    /// ([`super::HostCast`]).
+    /// **The outbound commands no server takes** -- every one, with nothing connected; with a
+    /// connection, those sent while no session is live (trt's mode switch, 2026-09-28: a client
+    /// that can dial a server also plays a world an embedder feeds, between sessions). An embedder
+    /// that plays the server reads what the player cast from here ([`super::HostCast`]).
     pub(super) offline: Option<Receiver<ClientCommand>>,
 }
 
@@ -327,8 +327,13 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
     let mut offline = Some(cmd_rx);
     if connect {
         let cmd_rx = offline.take().expect("the command receiver, not yet handed on");
-        // The writer thread outlives connections; the read thread hands it each new WorldWriter.
-        let (writer_tx, writer_rx) = crossbeam_channel::unbounded::<WorldWriter>();
+        // What the write thread cannot send, with no session live, goes on to the embedder.
+        let (offline_tx, offline_rx) = crossbeam_channel::unbounded::<ClientCommand>();
+        offline = Some(offline_rx);
+        // The writer thread outlives connections; the read thread hands it each new WorldWriter,
+        // and `None` when that connection's cycle has ended -- so nothing is written to a socket
+        // whose session is over.
+        let (writer_tx, writer_rx) = crossbeam_channel::unbounded::<Option<WorldWriter>>();
         let clock = Arc::clone(&ping_clock);
         // The read thread's own handle: `SMSG_PONG` is measured where it lands, not where it is
         // drained (B346 — see [`PingClock`]).
@@ -341,7 +346,7 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
                 benilla_world::thread_qos::promote_current_thread(
                     benilla_world::thread_qos::QosClass::UserInitiated,
                 );
-                writer_loop(&cmd_rx, writer_rx, &clock)
+                writer_loop(&cmd_rx, writer_rx, &clock, &offline_tx)
             })
             .expect("spawn wow-net-write thread");
         thread::Builder::new()
@@ -368,7 +373,7 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
                     // fresh writer arrives, and still has to: between the old socket dying and
                     // that handover the keepalive tick can still fire on the stale writer.)
                     read_clock.lock_recover().clear();
-                    match run(
+                    let cycle = run(
                         &cfg,
                         &events_tx,
                         &writer_tx,
@@ -376,7 +381,12 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
                         &abandon,
                         &read_clock,
                         &mut tails_announced,
-                    ) {
+                    );
+                    // The session is over whichever way the cycle ended: its writer goes too.
+                    if writer_tx.send(None).is_err() {
+                        return;
+                    }
+                    match cycle {
                         Ok(Cycle::Exit) => return,
                         Ok(Cycle::Repark) => {}
                         Ok(end @ (Cycle::LoggedOut | Cycle::LoginRefused)) => {
@@ -447,7 +457,7 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
 fn run(
     cfg: &NetConfig,
     events_tx: &Sender<SessionEvent>,
-    writer_tx: &Sender<WorldWriter>,
+    writer_tx: &Sender<Option<WorldWriter>>,
     parks: &Parks,
     abandon: &AtomicU64,
     ping_clock: &Mutex<PingClock>,
@@ -866,7 +876,7 @@ fn run(
         {
             return Ok(Cycle::Exit);
         }
-        if writer_tx.send(writer).is_err() {
+        if writer_tx.send(Some(writer)).is_err() {
             // The writer thread only ends when the app drops every command sender — app exit.
             return Ok(Cycle::Exit);
         }
@@ -1035,8 +1045,9 @@ fn trace_sends(w: &mut WorldWriter) {
 /// from the reconnect handshake anyway. Ends when the app drops every command sender.
 fn writer_loop(
     cmd_rx: &Receiver<ClientCommand>,
-    mut writer_rx: Receiver<WorldWriter>,
+    mut writer_rx: Receiver<Option<WorldWriter>>,
     ping_clock: &Mutex<PingClock>,
+    offline: &Sender<ClientCommand>,
 ) {
     let mut writer: Option<WorldWriter> = None;
     let mut warned = 0u32;
@@ -1051,7 +1062,12 @@ fn writer_loop(
     loop {
         crossbeam_channel::select! {
             recv(writer_rx) -> w => match w {
-                Ok(mut w) => {
+                // The session ended: nothing more is written to its socket, and the keepalive stops.
+                Ok(None) => {
+                    writer = None;
+                    ping_tick = crossbeam_channel::never();
+                }
+                Ok(Some(mut w)) => {
                     // Arm the outbound opcode trace for this connection (tag `out`). Armed here
                     // rather than at construction because the sink is an app-side concern and a
                     // writer outlives none of them; a fresh socket starts a fresh log.
@@ -1114,14 +1130,17 @@ fn writer_loop(
             recv(cmd_rx) -> cmd => {
                 let Ok(cmd) = cmd else { return }; // all app senders dropped → app exit
                 let Some(w) = writer.as_mut() else {
-                    // No live writer: the session is gone and this command evaporates. Traced
+                    // No live writer: no server takes this command. It goes on to the embedder,
+                    // which may be playing the world itself between sessions (`HostCast`); with no
+                    // embedder reading, it is dropped there. Traced
                     // unconditionally — this is the state in which a client keeps *deciding* to send
                     // movement (`snd` lines) that no one will ever receive (decision 0621).
                     // **Both lines name the command.** They used to write a fixed string, so a
                     // login that dropped five commands before the writer existed said only that
-                    // five of something went missing — and since `writer` is set exactly once and
-                    // never reset, this can only ever fire before the first `player_login`, which
-                    // makes the WHICH the entire question. A census of all 322 send sites could
+                    // five of something went missing — and since `writer` was then set exactly
+                    // once and never reset, this could only fire before the first `player_login`,
+                    // which made the WHICH the entire question. (It is reset now, when a session
+                    // ends, so it also fires between sessions -- where the embedder takes it.) A census of all 322 send sites could
                     // not answer it from the source; `cmd` is owned and unused here and
                     // `ClientCommand` derives `Debug`, so one login now answers it outright.
                     if benilla_assets::trace::enabled() {
@@ -1131,9 +1150,12 @@ fn writer_loop(
                         );
                     }
                     if warned < SEND_WARN_CAP {
-                        bevy::log::warn!("net: dropping command — not connected: {cmd:?}");
+                        bevy::log::warn!(
+                            "net: not connected -- the command goes to the embedder: {cmd:?}"
+                        );
                         warned += 1;
                     }
+                    let _ = offline.send(cmd);
                     continue;
                 };
                 let result = match cmd {

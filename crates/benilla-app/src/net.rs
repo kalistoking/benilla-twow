@@ -3414,16 +3414,27 @@ mod host_cast_tests {
             .is_none());
     }
 
-    /// **With a connection nothing changes**: the command receiver goes to the write thread as it
-    /// always has, and none is kept to read casts from. Offline, it is kept.
+    /// **The embedder always has the commands no server takes** (trt's mode switch, 2026-09-28):
+    /// offline, every one; with a connection, those sent while no session is live -- the write
+    /// thread hands them on instead of dropping them, so a client that can dial a server also
+    /// plays a world the embedder feeds between sessions.
     #[test]
-    fn with_a_connection_no_receiver_is_kept() {
+    fn the_commands_no_server_takes_are_the_embedders() {
         let offline = io::spawn_net(io::NetConfig::from_env(), false);
         assert!(offline.offline.is_some(), "offline, the embedder's to read");
         let online = io::spawn_net(io::NetConfig::from_env(), true);
-        assert!(
-            online.offline.is_none(),
-            "connected, the server's -- as before"
-        );
+        let receiver = online.offline.expect("connected, the embedder's too");
+        // No session has started: the cast goes on to the embedder.
+        online
+            .commands
+            .send(ClientCommand::CastSpell {
+                spell_id: 133,
+                target: None,
+            })
+            .expect("the write thread takes commands");
+        let got = receiver
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("handed on, not dropped");
+        assert!(matches!(got, ClientCommand::CastSpell { spell_id: 133, .. }));
     }
 }
