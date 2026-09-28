@@ -49,7 +49,7 @@ use crate::Chain;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{i32_at, parse, str_at, u32_at};
 
 const ITEM_VISUALS: &str = "DBFilesClient\\ItemVisuals.dbc";
 const ITEM_VISUAL_EFFECTS: &str = "DBFilesClient\\ItemVisualEffects.dbc";
@@ -106,6 +106,19 @@ pub struct EnchantCatalog {
     /// `Flags` (field 23) for **every** row the table carries, `0` included — so this map's key
     /// set is also the reference's `enchantTable[id] != 0` ([`EnchantCatalog::has_row`]).
     flags: HashMap<u32, u32>,
+    /// The three effects of every row with one: `(Effect, EffectPointsMin, EffectArg)` --
+    /// fields 1..3, 4..6 and 10..12, as vmangos's `SpellItemEnchantmentEntry` reads them.
+    effects: HashMap<u32, [EnchantEffect; 3]>,
+}
+
+/// One effect of a `SpellItemEnchantment` row: its `ITEM_ENCHANTMENT_TYPE_*` (`kind`; 0 none,
+/// 4 a resistance, 5 a stat), how much, and what it applies to -- the stat's `ITEM_MOD_*` for a
+/// stat, the school for a resistance (0 armour), the spell for the others.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EnchantEffect {
+    pub kind: u32,
+    pub amount: i32,
+    pub arg: u32,
 }
 
 /// `Flags & 0x1` — applying this enchant **binds the item to you**. Only two sites in the whole
@@ -139,6 +152,12 @@ impl EnchantCatalog {
     /// `"Stamina +7"`. `None` for an unknown id or a row with an empty name string.
     pub fn name(&self, enchant_id: u32) -> Option<&str> {
         self.names.get(&enchant_id).map(String::as_str)
+    }
+
+    /// The enchant's three effects, as a server applies them (`Player::ApplyEnchantment`) --
+    /// `None` for an unknown id or a row whose three are all empty.
+    pub fn effects(&self, enchant_id: u32) -> Option<&[EnchantEffect; 3]> {
+        self.effects.get(&enchant_id)
     }
 
     /// [`FLAG_BINDS_THE_ITEM`] — whether applying this enchant binds the item to you, the whole
@@ -183,6 +202,7 @@ impl EnchantCatalog {
             visuals,
             names,
             flags,
+            effects: HashMap::new(),
         }
     }
 
@@ -294,8 +314,17 @@ pub fn load_enchant_catalog(chain: &mut Chain) -> Result<EnchantCatalog> {
     let mut visuals = HashMap::new();
     let mut names = HashMap::new();
     let mut flags = HashMap::with_capacity(rs.records().len());
+    let mut effects = HashMap::new();
     for r in rs.records() {
         let Some(id) = u32_at(r, 0) else { continue };
+        let three: [EnchantEffect; 3] = std::array::from_fn(|i| EnchantEffect {
+            kind: u32_at(r, 1 + i).unwrap_or(0),
+            amount: i32_at(r, 4 + i).unwrap_or(0),
+            arg: u32_at(r, 10 + i).unwrap_or(0),
+        });
+        if three.iter().any(|e| e.kind != 0) {
+            effects.insert(id, three);
+        }
         // Every row lands here, `Flags == 0` included — the map's key set IS the row census.
         flags.insert(id, u32_at(r, 23).unwrap_or(0));
         let visual = u32_at(r, 22).unwrap_or(0) as i32;
@@ -311,12 +340,28 @@ pub fn load_enchant_catalog(chain: &mut Chain) -> Result<EnchantCatalog> {
         visuals,
         names,
         flags,
+        effects,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **An enchant's effects read as a server applies them**: every kind is one of the seven
+    /// `ITEM_ENCHANTMENT_TYPE_*`, and the equip-spell effect (3) -- which is how 1.12's own data
+    /// grants a random suffix's stats -- is common and names its spell.
+    #[test]
+    fn enchant_effects_name_their_kind_and_their_spell() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let cat = load_enchant_catalog(&mut chain).expect("SpellItemEnchantment");
+        assert!(cat.effects.len() > 1000, "{}", cat.effects.len());
+        let all: Vec<EnchantEffect> = cat.effects.values().flatten().copied().collect();
+        assert!(all.iter().all(|e| e.kind <= 7), "a kind past 7");
+        assert!(all.iter().filter(|e| e.kind == 3 && e.arg != 0).count() > 500);
+        assert!(cat.effects(u32::MAX).is_none());
+    }
 
     /// The two glow tables as they actually ship, including both traps: row **28**'s two
     /// out-of-range garbage slots and the reference's per-slot skip.
