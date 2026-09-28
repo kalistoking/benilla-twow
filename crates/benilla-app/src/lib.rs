@@ -279,6 +279,9 @@ pub use benilla_protocol::messages::MonsterMoveFacing;
 /// guid -> the entity the app built for it, for an embedder that named its world's objects by
 /// guid and needs a way back to what was built from them. See [`GuidIndex::entity`].
 pub use net::GuidIndex;
+/// A streamed object's descriptor fields, as the server last sent them -- read by an embedder
+/// that sets a server beside something else. See [`net::ObjectStore::fields`].
+pub use net::ObjectStore;
 /// Who the subject is, by server guid — the one thing an embedder that supplies the world cannot
 /// say through a click, a name or a unit token. See [`target::EmbedderSelection`].
 pub use target::EmbedderSelection;

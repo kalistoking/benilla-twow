@@ -388,7 +388,16 @@ pub(crate) fn current_speed(s: &MoveSpeeds, flags: u32) -> f32 {
 /// character compositor. Speeds and pose are **not** here — they're movement-block data ([`UnitSpeeds`]
 /// + the `Transform`), not descriptor fields.
 #[derive(Component, Clone, Default)]
-pub(crate) struct ObjectStore(pub(crate) ObjectFields);
+pub struct ObjectStore(pub(crate) ObjectFields);
+
+impl ObjectStore {
+    /// The object's descriptor fields as the server last sent them -- read-only: an embedder
+    /// compares what a server says (trt's live mode sets it beside a recording) and never
+    /// writes into it.
+    pub fn fields(&self) -> &ObjectFields {
+        &self.0
+    }
+}
 
 /// **One descriptor dword moved on a streamed object** — the reference's `CMirrorHandler` edge
 /// (decision 2297). The real client keeps a shadow copy of every object's field array, and the
