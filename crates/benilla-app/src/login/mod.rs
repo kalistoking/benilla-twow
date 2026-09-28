@@ -62,6 +62,12 @@ impl Plugin for LoginPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LoginIntent>()
             .init_resource::<LoginForm>()
+            .add_message::<EndSession>()
+            .init_resource::<EndSessionAsked>()
+            .add_systems(
+                Update,
+                end_session.after(benilla_world::schedule::WorldStage::Net),
+            )
             .add_systems(OnEnter(ClientState::Login), enter_login)
             .add_systems(OnExit(ClientState::Login), screen::exit_login)
             .add_systems(
@@ -107,6 +113,80 @@ impl Plugin for LoginPlugin {
                     .after(benilla_world::schedule::WorldStage::Net),
             );
     }
+}
+
+// ── An embedder ends the session ─────────────────────────────────────────────────────────────────
+
+/// **End the live session and go to the login screen** -- an embedder's word (trt's mode switch,
+/// 2026-09-28: one client that plays a server's world and, between sessions, a world trt feeds).
+///
+/// Wherever the session is:
+/// - **in the world**: hung up (`ClientCommand::HangUp`) -- the socket closed, not a server-paced
+///   logout the server may refuse -- and reported ended, not lost;
+/// - **at character select**: select's Back (the parked session dropped); a character being
+///   entered is waited for, then hung up in the world;
+/// - **logging in**: the attempt abandoned, and the realm list closed if it is up;
+/// - and always: the credentials forgotten, so it never logs in again by itself.
+///
+/// [`crate::SessionLive`] says when the teardown has run and a fed world is safe.
+#[derive(bevy::ecs::message::Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EndSession;
+
+/// An [`EndSession`] asked and not yet done: it waits for a character being entered.
+#[derive(Resource, Default)]
+pub(crate) struct EndSessionAsked(bool);
+
+#[allow(clippy::too_many_arguments)]
+fn end_session(
+    mut asked: MessageReader<EndSession>,
+    mut pending: ResMut<EndSessionAsked>,
+    mut intent: ResMut<LoginIntent>,
+    abandon: Res<LoginAbandon>,
+    mut roster: ResMut<crate::char_select::Roster>,
+    net: (
+        Res<crate::net::CharPick>,
+        Res<crate::net::RealmChoice>,
+        Res<crate::net::NetCommands>,
+    ),
+    mut realms: ResMut<crate::realm_select::Realms>,
+    state: Res<State<ClientState>>,
+    mut next: ResMut<NextState<ClientState>>,
+) {
+    let (pick, choice, commands) = net;
+    if asked.read().count() > 0 && !pending.0 {
+        pending.0 = true;
+        // Once: an attempt in flight is abandoned at its next stage, and nothing resubmits.
+        abandon.0.fetch_add(1, Ordering::SeqCst);
+        intent.in_flight = false;
+        intent.clear();
+        info!("login: the session ends -- the embedder asked");
+    }
+    if !pending.0 {
+        return;
+    }
+    match state.get() {
+        ClientState::InWorld => {
+            let _ = commands.0.send(crate::net::ClientCommand::HangUp);
+        }
+        ClientState::CharSelect | ClientState::CharCreate => {
+            if roster.picking() {
+                // Entering the world: its park is past, so Back would wait on the next one.
+                // Hung up there instead, once it is in.
+                return;
+            }
+            let _ = pick.0.send(crate::net::CharRequest::Abandon);
+        }
+        ClientState::Login => {
+            if realms.is_shown() {
+                let _ = choice.0.send(crate::net::RealmRequest::Abandon);
+                realms.hide_from_outside();
+            }
+        }
+    }
+    intent.clear();
+    roster.forget_pick();
+    pending.0 = false;
+    next.set(ClientState::Login);
 }
 
 // ── The credential policy ────────────────────────────────────────────────────────────────────────
@@ -1533,6 +1613,79 @@ mod tests {
             );
             assert_eq!(realmlist.address(), "localhost");
         }
+    }
+
+    /// **An embedder ends the session** (trt's mode switch): wherever it is, it goes to the login
+    /// screen and forgets the credentials -- in the world by hanging up, at select by Back, and a
+    /// character being entered is waited for, not abandoned half-way.
+    #[test]
+    fn end_session_leaves_for_the_login_screen_from_wherever_it_is() {
+        use crate::net::{CharPick, CharRequest, ClientCommand, NetCommands, RealmChoice};
+
+        let run = |state: ClientState, entering: bool| {
+            let (pick_tx, pick_rx) = crossbeam_channel::unbounded::<CharRequest>();
+            let (realm_tx, _realm_rx) = crossbeam_channel::unbounded();
+            let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ClientCommand>();
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+                .insert_state(state)
+                .init_resource::<LoginIntent>()
+                .init_resource::<crate::char_select::Roster>()
+                .init_resource::<crate::realm_select::Realms>()
+                .init_resource::<EndSessionAsked>()
+                .insert_resource(LoginAbandon(std::sync::Arc::new(
+                    std::sync::atomic::AtomicU64::new(0),
+                )))
+                .insert_resource(CharPick(pick_tx))
+                .insert_resource(RealmChoice(realm_tx))
+                .insert_resource(NetCommands(cmd_tx))
+                .add_message::<EndSession>()
+                .add_systems(Update, end_session);
+            app.world_mut().resource_mut::<LoginIntent>().creds = Some(("one".into(), "pone".into()));
+            if entering {
+                app.world_mut()
+                    .resource_mut::<crate::char_select::Roster>()
+                    .entering(7);
+            }
+            app.world_mut().write_message(EndSession);
+            app.update();
+            app.update();
+            (app, pick_rx, cmd_rx)
+        };
+
+        // In the world: hung up, not a logout the server paces.
+        let (app, pick, cmd) = run(ClientState::InWorld, false);
+        assert!(matches!(cmd.try_recv(), Ok(ClientCommand::HangUp)));
+        assert!(pick.try_recv().is_err());
+        assert_eq!(*app.world().resource::<State<ClientState>>().get(), ClientState::Login);
+        assert!(app.world().resource::<LoginIntent>().creds.is_none(), "never back by itself");
+        assert_eq!(
+            app.world()
+                .resource::<LoginAbandon>()
+                .0
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "an attempt in flight abandoned, once"
+        );
+
+        // At select: Back's own request.
+        let (app, pick, cmd) = run(ClientState::CharSelect, false);
+        assert!(matches!(pick.try_recv(), Ok(CharRequest::Abandon)));
+        assert!(cmd.try_recv().is_err());
+        assert_eq!(*app.world().resource::<State<ClientState>>().get(), ClientState::Login);
+
+        // Entering the world: nothing yet -- it waits for the world, then hangs up.
+        let (mut app, pick, cmd) = run(ClientState::CharSelect, true);
+        assert!(pick.try_recv().is_err(), "no Back into a park that has passed");
+        assert!(cmd.try_recv().is_err());
+        assert_eq!(*app.world().resource::<State<ClientState>>().get(), ClientState::CharSelect);
+        app.world_mut()
+            .resource_mut::<NextState<ClientState>>()
+            .set(ClientState::InWorld);
+        app.update();
+        app.update();
+        assert!(matches!(cmd.try_recv(), Ok(ClientCommand::HangUp)));
+        assert_eq!(*app.world().resource::<State<ClientState>>().get(), ClientState::Login);
     }
 
     /// **The seam the move opened** (2084): the widget publishes a press, this screen answers it.

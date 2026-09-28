@@ -191,6 +191,10 @@ impl Plugin for NetPlugin {
             Update,
             publish_world_time.in_set(benilla_world::schedule::WorldStage::Net),
         );
+        app.init_resource::<SessionLive>().add_systems(
+            Update,
+            publish_session_live.in_set(benilla_world::schedule::WorldStage::Net),
+        );
         app.insert_resource(WorldFeed(handles.feed))
             .insert_resource(NetEvents(handles.events))
             .insert_resource(NetCommands(handles.commands))
@@ -718,6 +722,19 @@ pub(crate) struct SelfGuid(pub(crate) Option<u64>);
 pub(crate) struct NetStatus {
     pub(crate) connected: bool,
     pub(crate) last_reason: Option<String>,
+}
+
+/// **Whether a server session is live**, for an embedder (trt's mode switch, 2026-09-28): a world
+/// it feeds must wait until the last session's teardown has run, or that teardown -- arriving on
+/// the same channel -- takes the fed world with it.
+#[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SessionLive(pub bool);
+
+/// [`NetStatus`], as an embedder reads it.
+fn publish_session_live(status: Res<NetStatus>, mut live: ResMut<SessionLive>) {
+    if live.0 != status.connected {
+        live.0 = status.connected;
+    }
 }
 
 /// The connection's ping clock and RTT history ([`io::PingClock`]), shared with both net threads:
@@ -2159,6 +2176,9 @@ pub(crate) enum ClientCommand {
     ClearTradeItem {
         trade_slot: u8,
     },
+    /// **Hang up the session** -- the socket closed on purpose ([`crate::EndSession`]), the
+    /// session reported ended rather than lost. With no session live it goes nowhere.
+    HangUp,
     /// Leave the world back to character select (`CMSG_LOGOUT_REQUEST`, the `/logout` command —
     /// decision 0193). The server answers `SMSG_LOGOUT_COMPLETE` (instant for a resting/GM
     /// character), which the IO thread turns into a [`LoggedOutMessage`] + an immediate

@@ -294,6 +294,10 @@ pub use creature_anim::{HostPose, HostPoseNow};
 pub use target::{HostGroundPick, HostGroundPicked};
 /// What the player cast while no server listens -- for a host that plays the server itself.
 pub use net::HostCast;
+/// An embedder's word to end the live session and go to the login screen, and whether one is
+/// live -- for a host that switches between a server's world and its own.
+pub use login::EndSession;
+pub use net::SessionLive;
 /// The realmlist an embedder pins, the one host its sessions may dial.
 pub use realmlist::EmbedderRealmlist;
 /// What is selected, by server guid -- the read-back an embedder needs to learn that the person

@@ -131,6 +131,14 @@ pub struct WorldWriter {
 }
 
 impl WorldWriter {
+    /// **Hang up** (trt's mode switch, 2026-09-28): the socket closed both ways, so the read
+    /// half's blocking poll ends at once instead of waiting on a server-paced logout. The server
+    /// sees the connection drop.
+    pub fn shutdown(&self) -> anyhow::Result<()> {
+        self.stream.shutdown(std::net::Shutdown::Both)?;
+        Ok(())
+    }
+
     /// Frame, encrypt, and write one packet. Private, and the sole write path — every verb in the
     /// family modules goes through here, so there is exactly one place framing/encryption happens.
     /// Visible to them because a private item is in scope throughout its module's descendants.

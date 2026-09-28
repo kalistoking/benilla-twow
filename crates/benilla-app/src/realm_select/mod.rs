@@ -318,6 +318,16 @@ impl Realms {
     pub(super) fn hide(&mut self) {
         self.shown = false;
     }
+
+    /// Whether the realm list is up (the park it answers is waiting), and its Cancel from outside
+    /// -- for [`crate::EndSession`].
+    pub(crate) fn is_shown(&self) -> bool {
+        self.shown
+    }
+
+    pub(crate) fn hide_from_outside(&mut self) {
+        self.hide();
+    }
 }
 
 /// **Offline** — the realm is up in the list but not accepting connections (`realmDown` in

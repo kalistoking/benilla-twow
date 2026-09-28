@@ -329,6 +329,10 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
         let cmd_rx = offline.take().expect("the command receiver, not yet handed on");
         // What the write thread cannot send, with no session live, goes on to the embedder.
         let (offline_tx, offline_rx) = crossbeam_channel::unbounded::<ClientCommand>();
+        // Set by the write thread when it hangs up on purpose, read by the read thread when the
+        // poll it was blocked on fails: an ended session, not a lost one.
+        let hung_up = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let hung_up_read = Arc::clone(&hung_up);
         offline = Some(offline_rx);
         // The writer thread outlives connections; the read thread hands it each new WorldWriter,
         // and `None` when that connection's cycle has ended -- so nothing is written to a socket
@@ -346,7 +350,7 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
                 benilla_world::thread_qos::promote_current_thread(
                     benilla_world::thread_qos::QosClass::UserInitiated,
                 );
-                writer_loop(&cmd_rx, writer_rx, &clock, &offline_tx)
+                writer_loop(&cmd_rx, writer_rx, &clock, &offline_tx, &hung_up)
             })
             .expect("spawn wow-net-write thread");
         thread::Builder::new()
@@ -401,6 +405,20 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
                             if events_tx
                                 .send(SessionEvent::Disconnected {
                                     reason: reason.into(),
+                                    end: SessionEnd::LoggedOut,
+                                })
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                        // Hung up on purpose (`EndSession`): the session ended, it was not lost
+                        // -- no "Disconnected from server", no reconnect.
+                        Err(_) if hung_up_read.swap(false, Ordering::SeqCst) => {
+                            bevy::log::info!("net: the session was ended by the app");
+                            if events_tx
+                                .send(SessionEvent::Disconnected {
+                                    reason: "the session was ended".into(),
                                     end: SessionEnd::LoggedOut,
                                 })
                                 .is_err()
@@ -1048,6 +1066,7 @@ fn writer_loop(
     mut writer_rx: Receiver<Option<WorldWriter>>,
     ping_clock: &Mutex<PingClock>,
     offline: &Sender<ClientCommand>,
+    hung_up: &std::sync::atomic::AtomicBool,
 ) {
     let mut writer: Option<WorldWriter> = None;
     let mut warned = 0u32;
@@ -1656,6 +1675,10 @@ fn writer_loop(
                     } => w.set_trade_item(trade_slot, bag, slot),
                     ClientCommand::ClearTradeItem { trade_slot } => w.clear_trade_item(trade_slot),
                     ClientCommand::Logout => w.logout_request(),
+                    ClientCommand::HangUp => {
+                        hung_up.store(true, Ordering::SeqCst);
+                        w.shutdown()
+                    }
                     ClientCommand::LogoutCancel => w.logout_cancel(),
                     ClientCommand::CompleteCinematic => w.complete_cinematic(),
                     ClientCommand::NextCinematicCamera => w.next_cinematic_camera(),

@@ -239,6 +239,21 @@ pub(crate) struct Roster {
 }
 
 impl Roster {
+    /// Whether a character is being entered -- the pick sent, the world not yet there.
+    pub(crate) fn picking(&self) -> bool {
+        self.pending_pick.is_some()
+    }
+
+    /// Forget the character being entered, as select's Back does.
+    pub(crate) fn forget_pick(&mut self) {
+        self.pending_pick = None;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn entering(&mut self, guid: u64) {
+        self.pending_pick = Some(guid);
+    }
+
     /// A roster with a pick already in flight — the state world entry runs in.
     ///
     /// `#[cfg(test)]` and `pub(crate)` because the fields are `pub(super)`: a test outside this
