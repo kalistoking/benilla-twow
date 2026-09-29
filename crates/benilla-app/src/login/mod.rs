@@ -66,7 +66,11 @@ impl Plugin for LoginPlugin {
             .init_resource::<EndSessionAsked>()
             .add_systems(
                 Update,
-                end_session.after(benilla_world::schedule::WorldStage::Net),
+                // After a logout's edge, so an `EndSession` in the same frame has the last word:
+                // an embedder tearing its world down as a logout still ends at the login screen.
+                end_session
+                    .after(benilla_world::schedule::WorldStage::Net)
+                    .after(crate::char_select::back_on_logout),
             )
             .add_systems(OnEnter(ClientState::Login), enter_login)
             .add_systems(OnExit(ClientState::Login), screen::exit_login)
@@ -1686,6 +1690,57 @@ mod tests {
         app.update();
         assert!(matches!(cmd.try_recv(), Ok(ClientCommand::HangUp)));
         assert_eq!(*app.world().resource::<State<ClientState>>().get(), ClientState::Login);
+    }
+
+    /// **An embedder's world ended as a logout still ends at the login screen** (trt, 2026-09-29):
+    /// trt tears its fed world down with the client's own logout -- `LoggedOut`, whose answer is
+    /// character select -- and asks `EndSession` in the same breath. Select won: the director
+    /// switched a scene to live and stood at an empty roster. The logout's edge is the world's
+    /// only, and an `EndSession` in the same frame has the last word; a logout arriving once the
+    /// client has left the world moves nothing.
+    #[test]
+    fn a_logout_beside_end_session_does_not_leave_it_at_select() {
+        use crate::net::{CharPick, LoggedOutMessage, NetCommands, RealmChoice};
+
+        let app = |logout_frames_later: usize| {
+            let (pick_tx, _pick_rx) = crossbeam_channel::unbounded();
+            let (realm_tx, _realm_rx) = crossbeam_channel::unbounded();
+            let (cmd_tx, _cmd_rx) = crossbeam_channel::unbounded();
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+                .insert_state(ClientState::InWorld)
+                .init_resource::<LoginIntent>()
+                .init_resource::<crate::char_select::Roster>()
+                .init_resource::<crate::realm_select::Realms>()
+                .init_resource::<EndSessionAsked>()
+                .insert_resource(LoginAbandon(std::sync::Arc::new(
+                    std::sync::atomic::AtomicU64::new(0),
+                )))
+                .insert_resource(CharPick(pick_tx))
+                .insert_resource(RealmChoice(realm_tx))
+                .insert_resource(NetCommands(cmd_tx))
+                .add_message::<EndSession>()
+                .add_message::<LoggedOutMessage>()
+                .add_systems(
+                    Update,
+                    (
+                        crate::char_select::back_on_logout,
+                        end_session.after(crate::char_select::back_on_logout),
+                    ),
+                );
+            app.world_mut().write_message(EndSession);
+            for _ in 0..logout_frames_later {
+                app.update();
+            }
+            app.world_mut().write_message(LoggedOutMessage);
+            app.update();
+            app.update();
+            app.update();
+            *app.world().resource::<State<ClientState>>().get()
+        };
+        assert_eq!(app(0), ClientState::Login, "in the same frame");
+        assert_eq!(app(1), ClientState::Login, "a frame later");
+        assert_eq!(app(3), ClientState::Login, "once it has left the world");
     }
 
     /// **The seam the move opened** (2084): the widget publishes a press, this screen answers it.

@@ -738,12 +738,17 @@ pub(crate) fn char_login_refusal_text(strings: &GlueStrings, result: u8) -> &str
 /// `OnExit(InWorld)` edge this transition causes: they stick because `feed_ui_input` stops running
 /// outside `InWorld`, which is a fact about the edge and not about *why* we left it — so both this
 /// path and the disconnect above get it from one place (1290).
-fn back_on_logout(
+///
+/// **A logout is the world's edge only.** A client that has left the world already -- an
+/// embedder's `EndSession` took it to the login screen while the embedder's own world was torn
+/// down as a logout -- is not sent back to an empty select by it (trt, 2026-09-29).
+pub(crate) fn back_on_logout(
     mut msgs: MessageReader<LoggedOutMessage>,
     mut roster: ResMut<Roster>,
+    state: Res<State<ClientState>>,
     mut next: ResMut<NextState<ClientState>>,
 ) {
-    if msgs.read().next().is_some() {
+    if msgs.read().next().is_some() && *state.get() == ClientState::InWorld {
         roster.pending_pick = None;
         next.set(ClientState::CharSelect);
     }
