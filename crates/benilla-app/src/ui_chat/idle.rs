@@ -236,7 +236,12 @@ pub(crate) fn idle_action(idle: Duration, gates: IdleGates) -> IdleAction {
 
 /// The handler proper. In-world only: `0x482ea0` is `WorldFrame::Render`, so there is no idle
 /// timer at the glue screens.
+///
+/// **And not in a world an embedder feeds** ([`crate::net::WorldFeed`]): there is no server to
+/// be away from or to be logged out of, and an embedder's person at its panels is not idle
+/// (trt, 2026-09-29).
 pub(crate) fn idle_handler(
+    fed: Option<Res<crate::net::WorldFeed>>,
     time: Res<Time<Real>>,
     last: Res<LastInput>,
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
@@ -247,6 +252,9 @@ pub(crate) fn idle_handler(
     mut stand: MessageWriter<crate::player::StandStateRequest>,
     follow: Res<crate::player::FollowState>,
 ) {
+    if fed.is_some() {
+        return;
+    }
     let idle = time.elapsed().saturating_sub(last.0);
     if idle < AUTO_AFK_AFTER {
         return;
@@ -693,6 +701,23 @@ mod tests {
             .map(|r| r.state)
             .collect::<Vec<_>>();
         assert_eq!(sat, vec![1], "one sit, through the one setter");
+    }
+
+    /// **A world an embedder feeds has no server to be idle to** (trt, 2026-09-29: "You have
+    /// been inactive for some time and will be logged out" over a scene): with a
+    /// [`crate::net::WorldFeed`] present the handler does nothing -- no sit, no AFK, no camp.
+    /// A live session, which has none, keeps the reference's law.
+    #[test]
+    fn a_fed_world_is_never_idle() {
+        for idle_ms in [300_000, 1_800_000] {
+            let (mut app, rx) = world(idle_ms, &[]);
+            let (feed, _events) = crossbeam_channel::unbounded();
+            app.insert_resource(crate::net::WorldFeed(feed));
+            app.world_mut().run_system_once(idle_handler).unwrap();
+            assert!(lines(&app).is_empty(), "{idle_ms} ms: {:?}", lines(&app));
+            assert!(!app.world().resource::<AfkMirror>().is_afk());
+            assert!(rx.try_iter().next().is_none());
+        }
     }
 
     /// Four minutes fifty-nine is not idle. Nothing at all — no line, no packet, no posture.
