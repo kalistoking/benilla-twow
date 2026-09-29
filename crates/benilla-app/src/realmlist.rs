@@ -49,9 +49,26 @@ pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut realmlist: ResMut<R
 #[derive(Resource, Clone, Debug)]
 pub struct EmbedderRealmlist(pub String);
 
+/// **The embedder repoints its pin** (trt, 2026-09-29): a changed [`EmbedderRealmlist`] is what the
+/// next attempt dials -- the server an embedder may talk to can change within a run. Still pinned.
+pub(crate) fn follow_the_embedders_pin(
+    pin: Option<Res<EmbedderRealmlist>>,
+    mut realmlist: ResMut<Realmlist>,
+) {
+    let Some(pin) = pin.filter(|p| p.is_changed()) else {
+        return;
+    };
+    if realmlist.address != pin.0 {
+        info!("realmlist: the embedder points it at {}", pin.0);
+        realmlist.address = pin.0.clone();
+    }
+    realmlist.pinned_by_env = true;
+}
+
 impl Plugin for RealmlistPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_cvar);
+        app.add_observer(on_cvar)
+            .add_systems(Update, follow_the_embedders_pin);
         let pinned = app
             .world()
             .get_resource::<EmbedderRealmlist>()
@@ -317,6 +334,23 @@ mod tests {
         assert!(realmlist.pinned_by_env());
         realmlist.set("elsewhere.example.org");
         assert_eq!(realmlist.address(), "127.0.0.1:3725");
+    }
+
+    /// **The embedder may repoint its own pin** (trt, 2026-09-29): the server it may talk to can
+    /// change in a run -- trt's Server Control starts one whose login server listens elsewhere --
+    /// and the next attempt dials the new one. Still pinned: the screen's control stays disabled.
+    #[test]
+    fn an_embedder_repointing_its_pin_is_dialed_next() {
+        let mut app = App::new();
+        app.insert_resource(EmbedderRealmlist("127.0.0.1".to_owned()));
+        RealmlistPlugin.build(&mut app);
+        app.update();
+        assert_eq!(app.world().resource::<Realmlist>().address(), "127.0.0.1");
+        app.world_mut().resource_mut::<EmbedderRealmlist>().0 = "127.0.0.1:3725".to_owned();
+        app.update();
+        let realmlist = app.world().resource::<Realmlist>();
+        assert_eq!(realmlist.address(), "127.0.0.1:3725");
+        assert!(realmlist.pinned_by_env());
     }
 
     #[test]
