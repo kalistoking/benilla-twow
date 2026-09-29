@@ -105,8 +105,11 @@ impl SmartBucket {
         // `0x509dd0`: how many rects of this size tile the screen — the dequeue cap. A
         // degenerate size saturates the cast; such a rect never strictly overlaps and adopts
         // on its first try.
-        let bound = ((viewport.x / input.width()).trunc() as i64 + 1)
-            .saturating_mul((viewport.y / input.height()).trunc() as i64 + 1);
+        // Saturating on both sides of the product too: a minimised window is a 0x0 viewport, and
+        // a zero-width rect over it is `inf as i64` = `i64::MAX`, whose `+ 1` overflowed.
+        let bound = ((viewport.x / input.width()).trunc() as i64)
+            .saturating_add(1)
+            .saturating_mul(((viewport.y / input.height()).trunc() as i64).saturating_add(1));
         let mut queue = VecDeque::from([seed]);
         for _ in 0..bound {
             let Some(node) = queue.pop_front() else {
@@ -333,6 +336,17 @@ mod tests {
                 got.min.y
             );
         }
+    }
+
+    /// **A zero-width plate is seated, not a panic** (trt's harness, 2026-09-29: its window went
+    /// 0x0 and `drive_vplates` overflowed on `inf as i64 + 1`).
+    #[test]
+    fn a_degenerate_rect_bounds_the_search_without_overflow() {
+        let mut b = SmartBucket::default();
+        seat(&mut b, Rect::new(500.0, 380.0, 540.0, 400.0));
+        let flat = Rect::new(510.0, 385.0, 510.0, 395.0);
+        let _ = b.resolve(flat, VP);
+        let _ = b.resolve(flat, Vec2::ZERO);
     }
 
     /// A free rect adopts unmoved on its first try — the every-frame fast path.
