@@ -205,6 +205,11 @@ struct UnitFeedMemo {
     guild_generation: gate::Watch,
     /// Whether `PLAYER_ENTERING_WORLD` has been fired (once per world entry, once per VM).
     entered_world: bool,
+    /// **Whose avatar the player-global memories are of** -- a different self guid is a different
+    /// character entered, not a change of this one's (trt, 2026-09-29: a scene's level-60
+    /// standpoint and a recording's level-1 player in one run printed "Congratulations, you have
+    /// reached level 1! ... 60!" at every switch).
+    self_guid: Option<u64>,
     /// Per token, the last snapshot we pushed — the per-field event triggers diff against it.
     last: HashMap<String, UnitState>,
     /// The last selection guid, for the `PLAYER_TARGET_CHANGED` trigger.
@@ -246,6 +251,41 @@ struct UnitFeedMemo {
     /// `None` until first seen; there is no event to fire on it, because the real client registers
     /// no field-change callback anywhere near this offset.
     action_bar_toggles: Option<u8>,
+}
+
+impl UnitFeedMemo {
+    /// **The player-global memories forgotten** -- at a world exit, and when the self avatar is
+    /// another character's: every next sighting re-seeds silently, as a fresh login's does.
+    fn forget_the_player(&mut self) {
+        self.entered_world = false;
+        self.last_xp = None;
+        self.last_rest = None;
+        self.last_level = None;
+        self.last_combo = None;
+        self.in_combat = None;
+        self.pvp_desired = None;
+        // The worn-display pair is a player-global like the rest, and forgetting it is what makes
+        // the next character's preference reach the VM at all: the push is an EDGE, so a memo
+        // carrying the last body's bits would silently skip a new body that happens to disagree
+        // with the VM's fresh "both shown" default (decision 1472).
+        self.worn_hidden = None;
+        // Same reason as the worn-display pair: the push is an EDGE, so a memo carrying the last
+        // body's byte would skip a new character whose own toggles happen to match it — and this
+        // one has no optimistic default to fall back on, only four nils.
+        self.action_bar_toggles = None;
+    }
+
+    /// **A self avatar seen**: a different guid than the memories are of is a different
+    /// character entered -- forgotten, and entered again (`PLAYER_ENTERING_WORLD`), as a login
+    /// is. Whether it was.
+    fn see_self(&mut self, guid: u64) -> bool {
+        let another = self.self_guid.is_some_and(|was| was != guid);
+        if another {
+            self.forget_the_player();
+        }
+        self.self_guid = Some(guid);
+        another
+    }
 }
 
 /// Adds the per-frame unit feed. The `Unit*` bindings themselves live in `benilla-ui`; this only
@@ -1712,6 +1752,11 @@ fn feed_units(
     // set_unit clears (UnitExists false), exactly as the real client reports a missing unit. Names
     // resolve through the cache — a miss queries the server once and lands on a later frame.
     let self_pair = self_q.iter().next();
+    if let Some((_, guid)) = self_pair {
+        if memo.see_self(guid.0) {
+            gate.audit("feed_units", "another self avatar");
+        }
+    }
     let player = self_pair.map(|(store, guid)| {
         let name = names.resolve(guid.0, &commands).map(str::to_string);
         let mut s = snapshot(store, name, 0, chr);
@@ -2180,22 +2225,7 @@ fn feed_units(
         }
     } else if memo.entered_world {
         gate.audit("feed_units", "the world-exit disarm");
-        memo.entered_world = false;
-        memo.last_xp = None;
-        memo.last_rest = None;
-        memo.last_level = None;
-        memo.last_combo = None;
-        memo.in_combat = None;
-        memo.pvp_desired = None;
-        // The worn-display pair is a player-global like the rest, and forgetting it is what makes
-        // the next character's preference reach the VM at all: the push is an EDGE, so a memo
-        // carrying the last body's bits would silently skip a new body that happens to disagree
-        // with the VM's fresh "both shown" default (decision 1472).
-        memo.worn_hidden = None;
-        // Same reason as the worn-display pair: the push is an EDGE, so a memo carrying the last
-        // body's byte would skip a new character whose own toggles happen to match it — and this
-        // one has no optimistic default to fall back on, only four nils.
-        memo.action_bar_toggles = None;
+        memo.forget_the_player();
     }
 
     for (token, snap) in [
@@ -2348,6 +2378,25 @@ fn combo_edge(last: Option<(u8, u64)>, now: (u8, u64)) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Another self avatar is another character entered, not a level-up** (trt, 2026-09-29): a
+    /// scene's level-60 standpoint and a recording's level-1 player, one after the other in one
+    /// run, printed "Congratulations, you have reached level 1! ... 60!" at every switch. The
+    /// player-global memories are of one guid; another forgets them, as a world exit does.
+    #[test]
+    fn another_self_avatar_forgets_the_players_memories() {
+        let mut memo = UnitFeedMemo::default();
+        assert!(!memo.see_self(1), "the first sighting is an entry, nothing to forget");
+        memo.entered_world = true;
+        memo.last_level = Some(60);
+        memo.last_xp = Some((1, 2));
+        assert!(!memo.see_self(1), "the same avatar again");
+        assert_eq!(memo.last_level, Some(60));
+        assert!(memo.see_self(7), "another avatar");
+        assert_eq!(memo.last_level, None, "its level is a first sighting, not a ding");
+        assert_eq!(memo.last_xp, None);
+        assert!(!memo.entered_world, "and it enters the world again");
+    }
 
     /// The DESCRIPTOR leg of the same answer: `snapshot` takes the team digit off
     /// `UNIT_FIELD_BYTES_0` byte 0 and **never** off `UNIT_FIELD_FACTIONTEMPLATE`.
