@@ -179,6 +179,11 @@ fn end_session(
                 return;
             }
             let _ = pick.0.send(crate::net::CharRequest::Abandon);
+            // Change Realm's list over select goes with it (trt's night review): it is drawn
+            // whatever the state, and stayed up over the login screen.
+            if realms.is_shown() {
+                realms.hide_from_outside();
+            }
         }
         ClientState::Login => {
             if realms.is_shown() {

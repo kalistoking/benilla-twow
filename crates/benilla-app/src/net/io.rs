@@ -377,6 +377,9 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
                     // fresh writer arrives, and still has to: between the old socket dying and
                     // that handover the keepalive tick can still fire on the stale writer.)
                     read_clock.lock_recover().clear();
+                    // Nor with the last one's hang-up (trt's night review): a hang-up that raced a
+                    // clean logout was left set, and the next session's real loss read as ended.
+                    hung_up_read.store(false, Ordering::SeqCst);
                     let cycle = run(
                         &cfg,
                         &events_tx,
@@ -416,6 +419,13 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
                         // -- no "Disconnected from server", no reconnect.
                         Err(_) if hung_up_read.swap(false, Ordering::SeqCst) => {
                             bevy::log::info!("net: the session was ended by the app");
+                            // As a clean logout ends (trt's night review): its `LoggedOut` first,
+                            // so the teardown lets the avatar go and the player is reset -- with
+                            // the `Disconnected` alone the avatar was kept, a reconnect's puppet,
+                            // into whatever world came next.
+                            if events_tx.send(SessionEvent::LoggedOut).is_err() {
+                                return;
+                            }
                             if events_tx
                                 .send(SessionEvent::Disconnected {
                                     reason: "the session was ended".into(),
