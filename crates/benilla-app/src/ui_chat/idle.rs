@@ -237,11 +237,14 @@ pub(crate) fn idle_action(idle: Duration, gates: IdleGates) -> IdleAction {
 /// The handler proper. In-world only: `0x482ea0` is `WorldFrame::Render`, so there is no idle
 /// timer at the glue screens.
 ///
-/// **And not in a world an embedder feeds** ([`crate::net::WorldFeed`]): there is no server to
-/// be away from or to be logged out of, and an embedder's person at its panels is not idle
-/// (trt, 2026-09-29).
+/// **And not in a world an embedder feeds** -- one with no server session behind it: there is
+/// no server to be away from or to be logged out of, and an embedder's person at its panels is
+/// not idle (trt, 2026-09-29). `WorldFeed` is there in every run, a live one too, so the session
+/// is what tells them apart (trt's night review, 2026-09-30: gated on the feed alone, a live
+/// session was never idle either).
 pub(crate) fn idle_handler(
     fed: Option<Res<crate::net::WorldFeed>>,
+    session: Option<Res<crate::net::SessionLive>>,
     time: Res<Time<Real>>,
     last: Res<LastInput>,
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
@@ -252,7 +255,7 @@ pub(crate) fn idle_handler(
     mut stand: MessageWriter<crate::player::StandStateRequest>,
     follow: Res<crate::player::FollowState>,
 ) {
-    if fed.is_some() {
+    if fed.is_some() && !session.is_some_and(|s| s.0) {
         return;
     }
     let idle = time.elapsed().saturating_sub(last.0);
@@ -718,6 +721,18 @@ mod tests {
             assert!(!app.world().resource::<AfkMirror>().is_afk());
             assert!(rx.try_iter().next().is_none());
         }
+    }
+
+    /// **A live session is idle as the game says** (trt's night review): the feed is there in
+    /// every run, and a server session behind it keeps the law -- five minutes, and the AFK.
+    #[test]
+    fn a_live_session_beside_the_feed_is_still_idle() {
+        let (mut app, _rx) = world(300_000, &[]);
+        let (feed, _events) = crossbeam_channel::unbounded();
+        app.insert_resource(crate::net::WorldFeed(feed));
+        app.insert_resource(crate::net::SessionLive(true));
+        app.world_mut().run_system_once(idle_handler).unwrap();
+        assert!(app.world().resource::<AfkMirror>().is_afk(), "{:?}", lines(&app));
     }
 
     /// Four minutes fifty-nine is not idle. Nothing at all — no line, no packet, no posture.

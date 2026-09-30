@@ -298,6 +298,7 @@ pub use net::HostCast;
 /// live -- for a host that switches between a server's world and its own.
 pub use login::EndSession;
 pub use net::SessionLive;
+pub use net::SelfGuid;
 /// The realmlist an embedder pins, the one host its sessions may dial.
 pub use realmlist::EmbedderRealmlist;
 /// What is selected, by server guid -- the read-back an embedder needs to learn that the person

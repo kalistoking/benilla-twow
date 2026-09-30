@@ -109,7 +109,11 @@ impl SmartBucket {
         // a zero-width rect over it is `inf as i64` = `i64::MAX`, whose `+ 1` overflowed.
         let bound = ((viewport.x / input.width()).trunc() as i64)
             .saturating_add(1)
-            .saturating_mul(((viewport.y / input.height()).trunc() as i64).saturating_add(1));
+            .saturating_mul(((viewport.y / input.height()).trunc() as i64).saturating_add(1))
+            // And capped (trt's night review): a tiny but non-zero rect saturates to `i64::MAX`,
+            // and the queue -- four children a node, nothing visited kept -- would grow without
+            // end. A real nameplate tiles a screen a few thousand times at most.
+            .min(MAX_TRIES);
         let mut queue = VecDeque::from([seed]);
         for _ in 0..bound {
             let Some(node) = queue.pop_front() else {
@@ -457,3 +461,6 @@ mod tests {
         assert_eq!(seat(&mut b, below), below);
     }
 }
+
+/// The most dequeues [`SmartBucket::solve`] makes -- past any real screen's tiling.
+const MAX_TRIES: i64 = 16_384;

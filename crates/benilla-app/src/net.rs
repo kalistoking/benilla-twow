@@ -713,7 +713,16 @@ impl GuidIndex {
 /// [`SelfPlayer`], and read by the combat-text emitters' source-ownership classifier
 /// (`crate::combat_text::melee_impact_text` — the "mine" test against Summoned/CreatedBy).
 #[derive(Resource, Default)]
-pub(crate) struct SelfGuid(pub(crate) Option<u64>);
+pub struct SelfGuid(pub(crate) Option<u64>);
+
+impl SelfGuid {
+    /// **Our own player's guid, for an embedder** (trt's night review, 2026-09-30): in a live
+    /// session the GM's own character -- which an embedder's idea of "the player" (the last world
+    /// it fed) is not.
+    pub fn guid(&self) -> Option<u64> {
+        self.0
+    }
+}
 
 /// Connection status for the rest of the app (decision 0065): `connected` flips on
 /// `Connected`/`Disconnected`; `last_reason` keeps the most recent failure so it can be surfaced
