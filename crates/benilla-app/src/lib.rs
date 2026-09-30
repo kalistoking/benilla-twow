@@ -291,7 +291,7 @@ pub use creature_anim::PlayAnimation;
 /// A host's hold on a unit's body animation, and what it is doing — an embedder's bench.
 pub use creature_anim::{HostPose, HostPoseNow};
 /// A host's ground pick: the targeting reticle without a spell, and where the click landed.
-pub use target::{HostGroundPick, HostGroundPicked};
+pub use target::{HostGroundPick, HostGroundPicked, HostObjectClicked};
 /// What the player cast while no server listens -- for a host that plays the server itself.
 pub use net::HostCast;
 /// An embedder's word to end the live session and go to the login screen, and whether one is

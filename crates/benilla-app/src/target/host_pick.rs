@@ -62,6 +62,33 @@ pub(super) fn commit_host_pick_on_click(
     commands.remove_resource::<HostGroundPick>();
 }
 
+/// **A left click on a gameobject, told to the embedder** -- the game itself selects only units
+/// (a gameobject is used, with the right button), but an embedder editing the world (trt's scene)
+/// wants the object a click lands on, as it gets the unit from the selection. Written when the
+/// press's nearest pick is a gameobject; nothing in the game changes.
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HostObjectClicked {
+    pub guid: u64,
+}
+
+/// A left click whose press was nearest a gameobject: its guid, told.
+pub(super) fn tell_host_object_click(
+    mut clicks: MessageReader<WorldClick>,
+    press: Res<super::PressPick>,
+    mut told: MessageWriter<HostObjectClicked>,
+) {
+    if clicks.read().last().is_none() {
+        return;
+    }
+    if !super::go_is_nearest(&press.hovered, &press.object) {
+        return;
+    }
+    if let Some(guid) = press.object.guid {
+        debug!("host: left click on gameobject {guid:#x}");
+        told.write(HostObjectClicked { guid });
+    }
+}
+
 /// A right press while the host's pick is up takes it down, picking nothing.
 pub(super) fn cancel_host_pick_on_right_press(
     mut commands: Commands,
@@ -136,5 +163,47 @@ mod tests {
         click(&mut world, id);
         assert!(picked(&mut world).is_empty());
         assert!(world.get_resource::<HostGroundPick>().is_some());
+    }
+
+    /// **A click on a gameobject is told to the host** -- and only when the object was the press's
+    /// nearest pick: a unit in front of it takes the click, and no object is no word.
+    #[test]
+    fn a_click_on_an_object_tells_the_host_its_guid() {
+        let mut world = world_with(None);
+        world.init_resource::<Messages<HostObjectClicked>>();
+        let id = world.register_system(tell_host_object_click);
+        let told = |world: &mut World| -> Vec<HostObjectClicked> {
+            world
+                .resource_mut::<Messages<HostObjectClicked>>()
+                .drain()
+                .collect()
+        };
+        // Nothing under the press: no word.
+        click(&mut world, id);
+        assert!(told(&mut world).is_empty());
+        // An object alone.
+        let object = world.spawn_empty().id();
+        world.resource_mut::<super::super::PressPick>().object = super::super::HoveredObject {
+            target: Some(object),
+            guid: Some(0xF110_0000_0065_62B6),
+            distance: 8.0,
+        };
+        click(&mut world, id);
+        assert_eq!(
+            told(&mut world),
+            [HostObjectClicked {
+                guid: 0xF110_0000_0065_62B6
+            }]
+        );
+        // A unit nearer than the object takes the click.
+        let unit = world.spawn_empty().id();
+        {
+            let mut press = world.resource_mut::<super::super::PressPick>();
+            press.hovered.target = Some(unit);
+            press.hovered.guid = Some(0xF130_0000_0000_0001);
+            press.hovered.distance = 4.0;
+        }
+        click(&mut world, id);
+        assert!(told(&mut world).is_empty());
     }
 }

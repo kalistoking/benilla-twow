@@ -89,7 +89,7 @@ mod relations;
 mod reticle;
 /// A host's ground pick — the reticle without a spell. See [`host_pick`].
 mod host_pick;
-pub use host_pick::{HostGroundPick, HostGroundPicked};
+pub use host_pick::{HostGroundPick, HostGroundPicked, HostObjectClicked};
 // `pub(crate)` for the same reason as `cursor_mode`: the faction catalog is one of
 // [`cursor_mode::go_highlightable`]'s three inputs, so the inspector needs it to run the real gate.
 pub(crate) mod ring;
@@ -441,6 +441,7 @@ impl Plugin for TargetPlugin {
             .init_resource::<scan::LastEnemy>()
             .add_message::<AttackNearestRequest>()
             .add_message::<HostGroundPicked>()
+            .add_message::<HostObjectClicked>()
             .add_message::<TargetByNameRequest>()
             .add_message::<AssistRequest>()
             .add_message::<click::DeselectGuid>()
@@ -494,6 +495,7 @@ impl Plugin for TargetPlugin {
                     (
                         crate::ui_action::targeting::commit_ground_cast_on_click,
                         host_pick::commit_host_pick_on_click,
+                        host_pick::tell_host_object_click,
                     ),
                     crate::ui_action::targeting::commit_object_cast_on_click,
                     click::act_on_right_click,
