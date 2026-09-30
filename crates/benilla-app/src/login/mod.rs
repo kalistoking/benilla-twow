@@ -68,9 +68,12 @@ impl Plugin for LoginPlugin {
                 Update,
                 // After a logout's edge, so an `EndSession` in the same frame has the last word:
                 // an embedder tearing its world down as a logout still ends at the login screen.
+                // And after a refused entry's edge (trt's night review): in the same frame it left
+                // the client at select with no session behind it.
                 end_session
                     .after(benilla_world::schedule::WorldStage::Net)
-                    .after(crate::char_select::back_on_logout),
+                    .after(crate::char_select::back_on_logout)
+                    .after(crate::char_select::back_on_login_refused),
             )
             .add_systems(OnEnter(ClientState::Login), enter_login)
             .add_systems(OnExit(ClientState::Login), screen::exit_login)
@@ -155,6 +158,7 @@ fn end_session(
     mut realms: ResMut<crate::realm_select::Realms>,
     state: Res<State<ClientState>>,
     mut next: ResMut<NextState<ClientState>>,
+    dialog: Option<ResMut<crate::glue::dialog::GlueDialog>>,
 ) {
     let (pick, choice, commands) = net;
     if asked.read().count() > 0 && !pending.0 {
@@ -190,6 +194,16 @@ fn end_session(
                 let _ = choice.0.send(crate::net::RealmRequest::Abandon);
                 realms.hide_from_outside();
             }
+        }
+    }
+    // An attempt abandoned re-parks without a word (trt's night review): its "Connecting..." or
+    // queue dialog would stand over the login screen until someone pressed Cancel.
+    if let Some(mut dialog) = dialog {
+        if matches!(
+            dialog.kind,
+            Some(crate::glue::dialog::DialogKind::Status | crate::glue::dialog::DialogKind::Queued)
+        ) {
+            dialog.close();
         }
     }
     intent.clear();
@@ -542,7 +556,7 @@ fn logon_refusal_text(strings: &GlueStrings, code: Option<u8>) -> &str {
 /// The policy tick + the net-message reactions. Runs in every state (the reconnect path fires
 /// while `InWorld`); the screen's own submit comes through [`login_input`], which calls
 /// [`send_login`] with `announced = true`.
-fn drive_policy(
+pub(crate) fn drive_policy(
     mut attempt: Attempt,
     realm_list_up: Res<crate::realm_select::Realms>,
     mut dialog: ResMut<GlueDialog>,
@@ -902,7 +916,7 @@ fn enter_login(mut form: ResMut<LoginForm>, mut preview: ResMut<GluePreview>) {
 /// submits, Esc quits (dialog-first — an open dialog's Esc is its Cancel/Okay), clicks focus the
 /// boxes / press the buttons / toggle the checkbox.
 #[allow(clippy::type_complexity)]
-fn login_input(
+pub(crate) fn login_input(
     realms: Res<crate::realm_select::Realms>,
     presses: Query<(Entity, &LoginAction, Ref<Interaction>)>,
     clicks: Res<crate::glue::GlueClicks>,

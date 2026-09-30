@@ -68,7 +68,14 @@ pub(crate) fn follow_the_embedders_pin(
 impl Plugin for RealmlistPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_cvar)
-            .add_systems(Update, follow_the_embedders_pin);
+            // Before either submit reads the address (trt's night review): a pin moved in the frame
+            // a login goes out is the one it dials.
+            .add_systems(
+                Update,
+                follow_the_embedders_pin
+                    .before(crate::login::drive_policy)
+                    .before(crate::login::login_input),
+            );
         let pinned = app
             .world()
             .get_resource::<EmbedderRealmlist>()

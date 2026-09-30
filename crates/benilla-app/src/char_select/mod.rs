@@ -667,7 +667,7 @@ fn back_on_disconnect(
 /// the relist behind this refusal produces exactly the roster it auto-answers: left set, the
 /// client would re-enter the character the server just refused, be refused again, and loop — from
 /// behind a black screen, since each pass raises the cover afresh.
-fn back_on_login_refused(
+pub(crate) fn back_on_login_refused(
     mut msgs: MessageReader<CharacterLoginFailedMessage>,
     mut roster: ResMut<Roster>,
     mut next: ResMut<NextState<ClientState>>,
