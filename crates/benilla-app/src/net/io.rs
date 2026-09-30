@@ -343,6 +343,8 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
         // drained (B346 — see [`PingClock`]).
         let read_clock = Arc::clone(&ping_clock);
         let abandon = Arc::clone(&login_abandon);
+        // The write thread says an ended session's end itself (see `ClientCommand::HangUp`).
+        let hang_events = events_tx.clone();
         thread::Builder::new()
             .name("wow-net-write".into())
             .spawn(move || {
@@ -350,7 +352,7 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
                 benilla_world::thread_qos::promote_current_thread(
                     benilla_world::thread_qos::QosClass::UserInitiated,
                 );
-                writer_loop(&cmd_rx, writer_rx, &clock, &offline_tx, &hung_up)
+                writer_loop(&cmd_rx, writer_rx, &clock, &offline_tx, &hung_up, &hang_events)
             })
             .expect("spawn wow-net-write thread");
         thread::Builder::new()
@@ -396,6 +398,9 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
                     match cycle {
                         Ok(Cycle::Exit) => return,
                         Ok(Cycle::Repark) => {}
+                        // A clean logout that raced a hang-up: its end was said already.
+                        Ok(Cycle::LoggedOut | Cycle::LoginRefused)
+                            if hung_up_read.swap(false, Ordering::SeqCst) => {}
                         Ok(end @ (Cycle::LoggedOut | Cycle::LoginRefused)) => {
                             // Clean logout: the Disconnected tears the streamed world down app-side
                             // (decision 0065's path); the app's pending credentials re-park us live.
@@ -417,24 +422,11 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
                         }
                         // Hung up on purpose (`EndSession`): the session ended, it was not lost
                         // -- no "Disconnected from server", no reconnect.
+                        // Its end was said by the write thread as it hung up (`LoggedOut`, then
+                        // the `Disconnected` -- the teardown lets the avatar go); the socket's
+                        // closing now is only that session's last word.
                         Err(_) if hung_up_read.swap(false, Ordering::SeqCst) => {
-                            bevy::log::info!("net: the session was ended by the app");
-                            // As a clean logout ends (trt's night review): its `LoggedOut` first,
-                            // so the teardown lets the avatar go and the player is reset -- with
-                            // the `Disconnected` alone the avatar was kept, a reconnect's puppet,
-                            // into whatever world came next.
-                            if events_tx.send(SessionEvent::LoggedOut).is_err() {
-                                return;
-                            }
-                            if events_tx
-                                .send(SessionEvent::Disconnected {
-                                    reason: "the session was ended".into(),
-                                    end: SessionEnd::LoggedOut,
-                                })
-                                .is_err()
-                            {
-                                return;
-                            }
+                            bevy::log::info!("net: the ended session's socket closed");
                         }
                         Err(e) => {
                             // A live-stream failure — including a displacement kick, which reaches
@@ -1077,6 +1069,7 @@ fn writer_loop(
     ping_clock: &Mutex<PingClock>,
     offline: &Sender<ClientCommand>,
     hung_up: &std::sync::atomic::AtomicBool,
+    events: &Sender<SessionEvent>,
 ) {
     let mut writer: Option<WorldWriter> = None;
     let mut warned = 0u32;
@@ -1687,7 +1680,20 @@ fn writer_loop(
                     ClientCommand::Logout => w.logout_request(),
                     ClientCommand::HangUp => {
                         hung_up.store(true, Ordering::SeqCst);
-                        w.shutdown()
+                        let shut = w.shutdown();
+                        // **The session's end said now, as a clean logout ends** -- `LoggedOut`,
+                        // then the `Disconnected` -- not when the read thread sees the socket go
+                        // (trt, 2026-09-30): on Windows a blocked `recv` is not woken by our own
+                        // shutdown, and the server closes its side only once it has ended the
+                        // session, some 20 s later. The embedder waited all of it on the login
+                        // screen. The read thread, when it wakes, only says so.
+                        let _ = events.send(SessionEvent::LoggedOut);
+                        let _ = events.send(SessionEvent::Disconnected {
+                            reason: "the session was ended".into(),
+                            end: SessionEnd::LoggedOut,
+                        });
+                        bevy::log::info!("net: the session was ended by the app");
+                        shut
                     }
                     ClientCommand::LogoutCancel => w.logout_cancel(),
                     ClientCommand::CompleteCinematic => w.complete_cinematic(),
