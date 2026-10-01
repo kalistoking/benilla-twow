@@ -571,6 +571,9 @@ pub enum SessionEvent {
     /// Mid-session reputation deltas (`SMSG_SET_FACTION_STANDING`): `(reputationListId,
     /// standing)` per changed slot — same standing convention as [`Self::Reputations`].
     ReputationDelta { standings: Vec<(u32, i32)> },
+    /// The forced-reaction table (`SMSG_SET_FORCED_REACTIONS`): `(Faction.dbc id, reaction rank)`,
+    /// whole, replacing the last. The reaction resolver reads it ahead of the faction templates.
+    ForcedReactions { reactions: Vec<(u32, u32)> },
     /// One reputation-list slot just became visible in the pane (`SMSG_SET_FACTION_VISIBLE`) — the
     /// server's "you have now met these people". Carries no standing; it only lifts the slot's
     /// visible flag, which is what decides whether the pane lists the row at all.

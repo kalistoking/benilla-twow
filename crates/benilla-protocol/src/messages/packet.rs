@@ -393,6 +393,12 @@ pub enum ServerPacket {
     SetFactionStanding {
         standings: Vec<(u32, i32)>,
     },
+    /// `SMSG_SET_FORCED_REACTIONS` — the whole forced-reaction table: `(Faction.dbc id, reaction
+    /// rank)` per forced faction, replacing the previous one (an aura 139 such as *King of the
+    /// Gordok*'s makes its factions friendly to the player whatever the templates say).
+    SetForcedReactions {
+        reactions: Vec<(u32, u32)>,
+    },
     /// `SMSG_SET_FACTION_VISIBLE` — one reputation-list slot just became visible in the pane
     /// (vmangos `ReputationMgr::SendVisible`, pushed the first time the player meets the faction).
     /// It carries **no standing**: the slot's existing standing is already correct, and this only
@@ -1701,6 +1707,7 @@ impl ServerPacket {
             ServerPacket::SetProficiency { .. } => "SMSG_SET_PROFICIENCY".into(),
             ServerPacket::InitializeFactions { .. } => "SMSG_INITIALIZE_FACTIONS".into(),
             ServerPacket::SetFactionStanding { .. } => "SMSG_SET_FACTION_STANDING".into(),
+            ServerPacket::SetForcedReactions { .. } => "SMSG_SET_FORCED_REACTIONS".into(),
             ServerPacket::SetFactionVisible { .. } => "SMSG_SET_FACTION_VISIBLE".into(),
             ServerPacket::NameQueryResponse { .. } => "SMSG_NAME_QUERY_RESPONSE".into(),
             ServerPacket::CreatureQueryResponse { .. } => "SMSG_CREATURE_QUERY_RESPONSE".into(),

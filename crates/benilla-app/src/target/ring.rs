@@ -36,7 +36,7 @@
 //! triangle pulse) — is live: [`super::CombatFlash`] carries the frame's verdict + colour and
 //! outranks every branch below (player/dead/reaction), the byte order. The player path's party
 //! legs are live (0434 phase 6 — pale blue / pale green off the roster). Deferred selector
-//! states: the full PvP attackability matrix (X/Y), forced reactions, contested-guard.
+//! states: the full PvP attackability matrix (X/Y), contested-guard.
 
 use benilla_formats::{load_faction_catalog, reputation_rank, FactionCatalog, Reaction};
 use benilla_protocol::EntityKind;
@@ -555,8 +555,8 @@ pub(super) fn push_ring(
 /// [`ring_variant`]'s own split, and FFA waits for PvP. Both are strictly *below* the duel rung,
 /// so their absence cannot change a duel's answer.
 ///
-/// Deferred pieces of the real orchestration: contested-guard flag, forced reactions
-/// (`SMSG_SET_FORCED_REACTIONS`), and the summon +1 tail. Returns the **raw reaction rank**
+/// Deferred pieces of the real orchestration: contested-guard flag and the summon +1 tail
+/// (the forced-reaction table is read by [`forced_rank`]). Returns the **raw reaction rank**
 /// (`0..=7` — the scale the ring palette indexes: 0–1 red, 2 orange, 3 yellow, 4–7 green); the
 /// comparator's `{1, 3, 4}` sit on the same scale. **3 (neutral)** when anything is missing (no
 /// catalog, fields not yet streamed) — the reference resolver's own fall-through is the yellow branch.
@@ -578,6 +578,10 @@ pub(crate) fn ring_reaction(
         let catalog = &factions?.0;
         let self_store = self_store?;
         let target_tpl = catalog.template(target_store?.0.unit_faction_template()?)?;
+        // 0. The forced-reaction table (`0x4d6490`), ahead of every faction rule.
+        if let Some(rank) = forced_rank(reputations, target_tpl.faction) {
+            return Some(rank);
+        }
         // 1. The reputation branch: rank with the unit's faction, when it has a reputation slot.
         if let Some(info) = catalog.reputation_faction(target_tpl.faction) {
             let standing = reputations
@@ -593,6 +597,18 @@ pub(crate) fn ring_reaction(
         Some(target_tpl.reaction_toward(self_tpl) as u8)
     })();
     resolved.unwrap_or(Reaction::Neutral as u8)
+}
+
+/// The forced reaction the server set for a `Faction.dbc` id (`SMSG_SET_FORCED_REACTIONS`, an aura
+/// 139 such as *King of the Gordok*'s), as a rank on the ring scale (`0..=7`); `None` when the
+/// faction is not forced. It answers both directions of `UnitReaction`, ahead of the reputation
+/// branch and the template comparator.
+fn forced_rank(reputations: &Reputations, faction: u32) -> Option<u8> {
+    reputations
+        .1
+        .iter()
+        .find(|&&(id, _)| id == faction)
+        .map(|&(_, rank)| rank.min(7) as u8)
 }
 
 /// `UNIT_FLAG_PVP_ATTACKABLE` — `UNIT_FIELD_FLAGS` bit 3. Behaviourally "player-controlled": the
@@ -676,8 +692,7 @@ const UNIT_FLAG_PVP: u32 = 0x1000;
 /// the client shows exactly that: a friendly-category plate with a yellow bar. Substituting the
 /// standing here is what put those 36 shipped faction templates in the enemy category (1530).
 ///
-/// Deferred, and each one only ever makes a unit *more* friendly than we say: the forced-reaction
-/// table (`0x4d6490`, `SMSG_SET_FORCED_REACTIONS` — no wire support yet), the party rung of the
+/// Deferred, and each one only ever makes a unit *more* friendly than we say: the party rung of the
 /// player-vs-player block, and the charmed-player case that would stop leg 3 firing at all.
 pub(crate) fn reaction_from_player(
     factions: Option<&Factions>,
@@ -698,6 +713,10 @@ pub(crate) fn reaction_from_player(
     let resolved = (|| {
         let catalog = &factions?.0;
         let target_tpl = catalog.template(target_store?.0.unit_faction_template()?)?;
+        // The forced-reaction table (`0x4d6490`), ahead of every faction rule.
+        if let Some(rank) = forced_rank(reputations, target_tpl.faction) {
+            return Some(rank);
+        }
         // Leg 3: a faction that owns a reputation slot is answered by the AT-WAR bit alone.
         if let Some(at_war) = at_war_with(catalog, reputations, target_tpl.faction) {
             return Some(if at_war {
@@ -1090,6 +1109,13 @@ mod tests {
         let chicken = unit(31);
         assert!(!category(&chicken, &quiet), "a critter is enemy-category");
         assert_eq!(rank(&chicken, &quiet), 3, "and its bar is neutral yellow");
+        // `SMSG_SET_FORCED_REACTIONS` naming the chicken's faction (28) makes it friendly, ahead
+        // of the templates — the King of the Gordok's ogres; a table naming another faction does not.
+        let forced = Reputations(Vec::new(), vec![(28, 4)]);
+        assert_eq!(rank(&chicken, &forced), 4, "a forced faction answers its forced rank");
+        assert!(category(&chicken, &forced), "…and is friendly-category");
+        let elsewhere = Reputations(Vec::new(), vec![(29, 4)]);
+        assert_eq!(rank(&chicken, &elsewhere), 3, "another faction's entry changes nothing");
 
         // A League of Arathor Emissary (FT 1577 → faction 509, reputation slot 53) is answered by
         // the AT-WAR bit — not at war → 4 → not attackable → the FRIENDLY bucket, Shift-V only.
@@ -1111,7 +1137,7 @@ mod tests {
         // …and declaring war flips it, which is the same bit the reputation pane's checkbox writes.
         let mut slots = vec![(0u8, 0i32); 64];
         slots[1] = (benilla_formats::faction_flags::AT_WAR, 0); // Booty Bay = slot 1
-        let at_war = Reputations(slots);
+        let at_war = Reputations(slots, Vec::new());
         assert!(!category(&goblin, &at_war), "at war → enemy category");
         assert!(
             category(&emissary, &at_war),
@@ -1156,7 +1182,7 @@ mod tests {
         let quiet = Reputations::default(); // nothing at war — the out-of-box state
         let mut slots = vec![(0u8, 0i32); 64];
         slots[36] = (benilla_formats::faction_flags::AT_WAR, 0); // Cenarion Circle = slot 36
-        let at_war = Reputations(slots);
+        let at_war = Reputations(slots, Vec::new());
 
         let attackable = |u: &ObjectStore, r: &Reputations| {
             can_attack_from_player(Some(&factions), r, Some(u), Some(&me), false)

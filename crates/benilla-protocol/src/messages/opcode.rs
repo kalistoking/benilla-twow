@@ -71,6 +71,10 @@ pub const SMSG_MONSTER_MOVE: u16 = 0x00DD;
 /// [`super::monster_move::read_monster_move`]; decision 1936.
 pub const SMSG_MONSTER_MOVE_TRANSPORT: u16 = 0x02AE; // 686
 pub const SMSG_INITIALIZE_FACTIONS: u16 = 0x0122;
+/// The forced-reaction table (vmangos `Player::SendForcedReactions`, resent whole on every change of
+/// a `SPELL_AURA_FORCE_REACTION` (139) aura, e.g. *King of the Gordok*): a `u32` count, then
+/// `(faction id, reaction rank)` pairs of two `u32`s.
+pub const SMSG_SET_FORCED_REACTIONS: u16 = 0x02A5;
 /// A faction became visible in the reputation pane (VERIFIED vmangos `Opcodes_1_12_1.h`: 291,
 /// sender `ReputationMgr::SendVisible`) — body one `u32` reputation-list slot. The server sets the
 /// slot's `FACTION_FLAG_VISIBLE` on first contact and pushes *only* this, never a fresh standing:

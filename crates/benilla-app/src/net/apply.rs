@@ -558,6 +558,9 @@ fn apply_unpeeled(
                 );
                 session::reputation_delta(standings, &mut reputations, &mut quest)
             }
+            SessionEvent::ForcedReactions { reactions } => {
+                session::forced_reactions(reactions, &mut reputations)
+            }
             SessionEvent::ReputationVisible { list_id } => {
                 session::reputation_visible(list_id, &mut reputations)
             }

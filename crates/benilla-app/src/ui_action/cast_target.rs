@@ -574,7 +574,7 @@ mod tests {
             target_store: Some(&it),
             self_store: Some(&me),
             factions: None,
-            reputations: &Reputations(Vec::new()),
+            reputations: &Reputations(Vec::new(), Vec::new()),
         };
         let ice_armor = spell(0, 1);
         assert_eq!(
@@ -823,7 +823,7 @@ mod tests {
     }
 
     fn rel_none() -> TargetRelations<'static> {
-        static EMPTY: Reputations = Reputations(Vec::new());
+        static EMPTY: Reputations = Reputations(Vec::new(), Vec::new());
         TargetRelations {
             target_store: None,
             self_store: None,

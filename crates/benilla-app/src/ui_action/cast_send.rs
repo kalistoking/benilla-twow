@@ -833,7 +833,7 @@ mod tests {
         on_object: None,
     };
 
-    static EMPTY_REPUTATIONS: Reputations = Reputations(Vec::new());
+    static EMPTY_REPUTATIONS: Reputations = Reputations(Vec::new(), Vec::new());
 
     /// A context with nothing selected — every rung that needs world state is inert, so these
     /// tests pin the two rungs that fork on the commit and the commit itself.

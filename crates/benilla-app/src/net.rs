@@ -885,7 +885,13 @@ fn send_query_time(
 /// comparison. The **reputation pane** ([`crate::ui_reputation`]) reads the flag byte as well — the
 /// visible bit decides which rows exist at all, and bit `0x08` marks the pane's headers.
 #[derive(Resource, Default)]
-pub(crate) struct Reputations(pub(crate) Vec<(u8, i32)>);
+pub(crate) struct Reputations(
+    pub(crate) Vec<(u8, i32)>,
+    /// The forced-reaction table (`SMSG_SET_FORCED_REACTIONS`, `0x4d6490`): `(Faction.dbc id,
+    /// reaction rank)`. A faction listed here answers with that rank whatever its templates or our
+    /// standing say; empty unless an aura 139 is on us.
+    pub(crate) Vec<(u32, u32)>,
+);
 
 /// The player's hearthstone bind point (`SMSG_BINDPOINTUPDATE`, at login + on re-bind): the
 /// AreaTable id the hearthstone tooltip's `$z` token names ("Returns you to Goldshire.").

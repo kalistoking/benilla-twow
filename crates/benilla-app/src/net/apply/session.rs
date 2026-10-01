@@ -394,6 +394,13 @@ pub(super) fn reputations(standings: Vec<(u8, i32)>, reputations: &mut Reputatio
     reputations.0 = standings;
 }
 
+/// The forced-reaction table (`SMSG_SET_FORCED_REACTIONS`): the server resends it whole on every
+/// change, so it replaces the last one.
+pub(super) fn forced_reactions(reactions: Vec<(u32, u32)>, reputations: &mut Reputations) {
+    info!("net: forced reactions ({} factions)", reactions.len());
+    reputations.1 = reactions;
+}
+
 /// A mid-session standing delta (`SMSG_SET_FACTION_STANDING`): overwrite the changed slots,
 /// growing the store for a list id past the login snapshot (flags default 0 — the delta carries
 /// none), and **auto-reveal** each one.
