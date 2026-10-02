@@ -554,7 +554,9 @@ pub(super) fn inspect_ui(
             .unit_faction_template()
             .and_then(|t| factions?.catalog().template(t))
             .map(|t| {
-                if factions.is_some_and(|f| f.catalog().reputation_faction(t.faction).is_some()) {
+                if crate::target::ring::forced_rank(reputations, t.faction).is_some() {
+                    "forced"
+                } else if factions.is_some_and(|f| f.catalog().reputation_faction(t.faction).is_some()) {
                     "rep"
                 } else {
                     "tpl"

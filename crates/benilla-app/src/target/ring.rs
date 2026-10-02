@@ -603,7 +603,7 @@ pub(crate) fn ring_reaction(
 /// 139 such as *King of the Gordok*'s), as a rank on the ring scale (`0..=7`); `None` when the
 /// faction is not forced. It answers both directions of `UnitReaction`, ahead of the reputation
 /// branch and the template comparator.
-fn forced_rank(reputations: &Reputations, faction: u32) -> Option<u8> {
+pub(crate) fn forced_rank(reputations: &Reputations, faction: u32) -> Option<u8> {
     reputations
         .1
         .iter()

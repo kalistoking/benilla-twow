@@ -297,7 +297,11 @@ fn apply_unpeeled(
                 &mut entered_world,
             ),
             SessionEvent::LoggedOut => {
-                session::logged_out(&mut commands, &mut index, &mut self_guid, &mut logged_out)
+                session::logged_out(&mut commands, &mut index, &mut self_guid, &mut logged_out);
+                // The forced-reaction table is the character's: the core sends it only on an
+                // aura change, never at login, so one left here would colour the next character's
+                // world by the last one's aura.
+                reputations.1.clear();
             }
             // The logout arc's two narration packets (decision 0674) — `crate::ui_logout` owns the
             // decision table; this is only the hand-off.
@@ -306,6 +310,7 @@ fn apply_unpeeled(
             }
             SessionEvent::LogoutCancelled => logout.apply_cancelled(),
             SessionEvent::Disconnected { reason, end } => {
+                reputations.1.clear();
                 session::disconnected(
                     reason,
                     end,
