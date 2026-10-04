@@ -90,6 +90,9 @@ mod reticle;
 /// A host's ground pick — the reticle without a spell. See [`host_pick`].
 mod host_pick;
 pub use host_pick::{HostGroundPick, HostGroundPicked, HostObjectClicked};
+/// A host's right-click on a creature or gameobject -- see [`host_click`].
+mod host_click;
+pub use host_click::{HostClickOutcome, HostClickTarget, HostRightClick, HostRightClicked};
 // `pub(crate)` for the same reason as `cursor_mode`: the faction catalog is one of
 // [`cursor_mode::go_highlightable`]'s three inputs, so the inspector needs it to run the real gate.
 pub(crate) mod ring;
@@ -435,6 +438,7 @@ impl Plugin for TargetPlugin {
             .init_resource::<HoveredObject>()
             .init_resource::<PickOcclusion>()
             .init_resource::<PressPick>()
+            .init_resource::<host_click::HostClickAim>()
             .init_resource::<WorldCursor>()
             .init_resource::<CombatFlash>()
             .init_resource::<scan::TabHistory>()
@@ -442,6 +446,7 @@ impl Plugin for TargetPlugin {
             .add_message::<AttackNearestRequest>()
             .add_message::<HostGroundPicked>()
             .add_message::<HostObjectClicked>()
+            .add_message::<HostRightClicked>()
             .add_message::<TargetByNameRequest>()
             .add_message::<AssistRequest>()
             .add_message::<click::DeselectGuid>()
@@ -467,8 +472,11 @@ impl Plugin for TargetPlugin {
                     // press was over while it still exists (decision 1122 — see [`latch_press_pick`]).
                     (latch_press_pick, hover::update_pick_occlusion).chain(),
                     hover::update_hover,
-                    hover::update_hovered_object,
-                    cursor_mode::classify_cursor,
+                    // A host's right-click request aims the pick right after the object pick,
+                    // and latches the classifier's verdict right after it (the outer chain is at
+                    // Bevy's 20-tuple limit, so each pair is one element).
+                    (hover::update_hovered_object, host_click::aim).chain(),
+                    (cursor_mode::classify_cursor, host_click::press).chain(),
                     // The right button's down-edge cancel first (the ref's OnMouseDown hook,
                     // 0792): the frame the press lands, the cursor drive below already reads
                     // the mode cleared and the classifier's verdict stands.

@@ -92,7 +92,7 @@ pub(crate) enum CursorKind {
 
 impl CursorKind {
     /// The cursor's BLP stem in `Interface\Cursor\` (the client's mode-name table strings).
-    fn name(self) -> &'static str {
+    pub(super) fn name(self) -> &'static str {
         match self {
             CursorKind::Point => "Point",
             CursorKind::Attack => "Attack",

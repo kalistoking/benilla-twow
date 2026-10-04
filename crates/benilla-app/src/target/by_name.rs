@@ -346,12 +346,34 @@ impl ByNameScan<'_, '_> {
         filter: Filter,
         mode: Match,
     ) -> Option<(Entity, u64, String)> {
+        self.resolve_logged(query, search, filter, mode, true)
+    }
+
+    /// An embedder's **exact-name** lookup of any streamed unit, for [`super::host_click`] -- the
+    /// same ranking `/target` runs (so the nearest of several same-named units wins), but silent:
+    /// the host retries it every frame until the unit streams in, and one log line per frame
+    /// would bury the log.
+    pub(super) fn resolve_exact_quiet(&self, name: &str) -> Option<(Entity, u64)> {
+        self.resolve_logged(name, NameSearch::AnyUnit, Filter::AcceptAll, Match::ExactOnly, false)
+            .map(|(entity, guid, _)| (entity, guid))
+    }
+
+    fn resolve_logged(
+        &self,
+        query: &str,
+        search: NameSearch,
+        filter: Filter,
+        mode: Match,
+        log: bool,
+    ) -> Option<(Entity, u64, String)> {
         let query = query.trim();
         if query.is_empty() {
             return None;
         }
         let Some(origin) = self.origin() else {
-            info!("by-name: \"{query}\" — no active player object; nothing resolves");
+            if log {
+                info!("by-name: \"{query}\" — no active player object; nothing resolves");
+            }
             return None;
         };
         let mut considered = 0usize;
@@ -376,6 +398,9 @@ impl ByNameScan<'_, '_> {
             if best.as_ref().is_none_or(|(_, _, b, _)| r.beats(*b)) {
                 best = Some((entity, guid.0, r, name.to_string()));
             }
+        }
+        if !log {
+            return best.map(|(e, g, _, name)| (e, g, name));
         }
         match &best {
             Some((_, guid, r, name)) => info!(

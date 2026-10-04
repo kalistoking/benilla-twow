@@ -292,6 +292,9 @@ pub use creature_anim::PlayAnimation;
 pub use creature_anim::{HostPose, HostPoseNow};
 /// A host's ground pick: the targeting reticle without a spell, and where the click landed.
 pub use target::{HostGroundPick, HostGroundPicked, HostObjectClicked};
+/// A host's right-click on a creature or gameobject, and what the cursor said about it. See
+/// [`target::HostRightClick`].
+pub use target::{HostClickOutcome, HostClickTarget, HostRightClick, HostRightClicked};
 /// What the player cast while no server listens -- for a host that plays the server itself.
 pub use net::HostCast;
 /// An embedder's word to end the live session and go to the login screen, and whether one is

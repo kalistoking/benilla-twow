@@ -1639,7 +1639,7 @@ pub(super) fn clear(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// The §8.8 toast routing, case by case (decision 0545). The slot/flag/type combinations
@@ -2342,12 +2342,12 @@ mod tests {
     const BOAR: u64 = 0xB0A2;
     const ME: u64 = 0x5E1F;
 
-    fn store(pairs: &[(u16, u32)]) -> ObjectStore {
+    pub(crate) fn store(pairs: &[(u16, u32)]) -> ObjectStore {
         ObjectStore(benilla_protocol::ObjectFields::from_pairs(pairs))
     }
 
     /// Everything [`act_on_right_click`] and the commit under it reach for, and nothing else.
-    fn right_click_world() -> (World, Entity) {
+    pub(crate) fn right_click_world() -> (World, Entity) {
         let (tx, _rx) = crossbeam_channel::unbounded::<ClientCommand>();
         let mut world = World::new();
         world.insert_resource(NetCommands(tx));
