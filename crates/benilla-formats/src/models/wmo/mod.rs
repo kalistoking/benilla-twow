@@ -44,6 +44,10 @@ pub fn load_wmo(chain: &mut Chain, raw_path: &str) -> Result<Vec<super::RenderSu
 /// Abandoning the walk there cost that group its MOGP entirely — flags, portal-ref span, area, fog,
 /// doodad and light refs — which dead-ended the portal flood at B26's doorway (decision 0972).
 pub(crate) fn find_wmo_chunk<'a>(bytes: &'a [u8], magic: &[u8; 4]) -> Option<&'a [u8]> {
+    // MOGP runs to EOF whatever it declares (the six Shadowmoon_Slagpit01 groups declare 0x40).
+    if magic == b"PGOM" {
+        return benilla_wmo::mogp_payload(bytes);
+    }
     let mut off = 0usize;
     while off + 8 <= bytes.len() {
         let size = u32::from_le_bytes([
