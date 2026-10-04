@@ -319,22 +319,25 @@ impl DisplayModel {
     ///
     /// `true` once a display resolved through its catalog to a path we handed the asset server;
     /// `false` only for [`empty_display`] — a display id absent from `CreatureDisplayInfo` /
-    /// `GameObjectDisplayInfo`, a zero-scale row, or a GameObject display naming no path. That
-    /// second set is *our* gap, and the debug cube is how a session sees it.
+    /// `GameObjectDisplayInfo`, or a GameObject display naming no path.
+    /// That set is *our* gap, and the debug cube is how a session sees it. (A zero-scale creature
+    /// row is *not* in it: the catalog reads that scale as the default 1.0, like the core's
+    /// `CheckValidScale`.)
     pub(super) fn names_a_model(&self) -> bool {
         !matches!(self.handle, ModelHandle::None)
     }
 }
 
 /// Resolve a creature display id to a [`DisplayModel`]: load its M2 (no skins — the slots are filled at
-/// build time from `textures`). A missing/zero-scale display gets an empty model → cube fallback.
+/// build time from `textures`). A missing display gets an empty model → cube fallback; a
+/// zero `CreatureModelScale` row still names its model (the catalog reads the scale as 1.0).
 pub(super) fn new_creature_display(
     catalog: &CreatureCatalog,
     display_id: u32,
     asset_server: &AssetServer,
 ) -> DisplayModel {
     match catalog.model(display_id) {
-        Some(m) if m.scale > 0.0 => DisplayModel {
+        Some(m) => DisplayModel {
             handle: ModelHandle::M2(asset_server.load(m2_url(&m.model_path))),
             dir: model_dir(&m.model_path).to_string(),
             skins: m.textures,
@@ -345,7 +348,7 @@ pub(super) fn new_creature_display(
                 .is_some_and(|p| p.eq_ignore_ascii_case("character\\")),
             ..empty_shell()
         },
-        _ => empty_display(),
+        None => empty_display(),
     }
 }
 

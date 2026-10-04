@@ -117,6 +117,22 @@ struct DisplayRow {
     model_alpha: u32,
 }
 
+/// The spawned-creature scale product `CreatureModelData.modelScale × CreatureDisplayInfo
+/// .creatureModelScale`, with a product of 0 or less (or non-finite) read as `1.0`.
+///
+/// This mirrors the core's `CheckValidScale`, which turns a non-positive scale into the default
+/// 1.0. Turtle ships 114 `CreatureDisplayInfo` rows with `CreatureModelScale = 0` (the Gilneas
+/// humans, displays 20263-20334, among them): taken literally the product is 0 and every consumer
+/// that gates on `scale > 0` would treat a perfectly good model as missing.
+fn spawned_scale(model_scale: f32, display_scale: f32) -> f32 {
+    let product = model_scale * display_scale;
+    if product.is_finite() && product > 0.0 {
+        product
+    } else {
+        1.0
+    }
+}
+
 /// One CreatureModelData row (the parts we use).
 #[derive(Debug, Clone)]
 struct ModelRow {
@@ -274,7 +290,7 @@ impl CreatureCatalog {
     pub fn model_scale(&self, display_id: u32) -> Option<f32> {
         let row = self.display.get(&display_id)?;
         let model = self.models.get(&row.model_id)?;
-        Some(model.scale * row.scale)
+        Some(spawned_scale(model.scale, row.scale))
     }
 
     /// A display's **base render alpha** in `0.0..=1.0` — `CreatureDisplayInfo.CreatureModelAlpha`
@@ -370,7 +386,7 @@ impl CreatureCatalog {
             .flatten();
         Some(CreatureModel {
             model_path: model.path.clone(),
-            scale: model.scale * row.scale,
+            scale: spawned_scale(model.scale, row.scale),
             textures: row.textures.clone(),
             npc_appearance,
             blood_display: row.blood_level as i32,
@@ -592,6 +608,85 @@ fn load_creature_display_info_extra(chain: &mut Chain) -> Result<HashMap<u32, Np
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn model_row(path: &str, scale: f32) -> ModelRow {
+        ModelRow {
+            path: path.to_string(),
+            scale,
+            flags: 0,
+            size_class: 0,
+            blood: -1,
+            footprint_texture: -1,
+            footprint_length: 0.0,
+            footprint_width: 0.0,
+            collision_height: 0.0,
+            foley_material: 0,
+            footstep_shake: 0,
+            death_thud_shake: 0,
+        }
+    }
+
+    fn display_row(model_id: u32, scale: f32) -> DisplayRow {
+        DisplayRow {
+            model_id,
+            extended_id: 0,
+            scale,
+            textures: [None, None, None],
+            blood_level: 0,
+            size_class: -1,
+            model_alpha: 255,
+        }
+    }
+
+    /// **A zero `CreatureModelScale` is the default 1.0, not a zero-size model** (B73) — the core's
+    /// `CheckValidScale`. Turtle's 114 such rows (Gilneas humans) were drawn as debug cubes
+    /// because a `scale > 0` gate read the product 0 as "no model".
+    #[test]
+    fn a_zero_display_scale_reads_as_one() {
+        let mut cat = CreatureCatalog::default();
+        cat.models
+            .insert(49, model_row(r"Character\Human\Male\HumanMale.mdx", 1.0));
+        cat.models.insert(50, model_row(r"Creature\Big\Big.mdx", 2.0));
+        cat.models.insert(51, model_row(r"Creature\Zero\Zero.mdx", 0.0));
+        cat.display.insert(1, display_row(49, 0.0)); // the Turtle shape
+        cat.display.insert(2, display_row(50, 0.5)); // an ordinary product, untouched
+        cat.display.insert(3, display_row(51, 1.0)); // a zero model scale folds the same way
+        cat.display.insert(4, display_row(49, -2.0)); // negative is invalid too
+        cat.display.insert(5, display_row(49, f32::NAN));
+
+        assert_eq!(cat.model(1).unwrap().scale, 1.0);
+        assert_eq!(cat.model(1).unwrap().model_path, r"Character\Human\Male\HumanMale.mdx");
+        assert_eq!(cat.model(2).unwrap().scale, 1.0); // 2.0 × 0.5
+        assert_eq!(cat.model(3).unwrap().scale, 1.0);
+        assert_eq!(cat.model(4).unwrap().scale, 1.0);
+        assert_eq!(cat.model(5).unwrap().scale, 1.0);
+        for id in 1..=5 {
+            assert_eq!(cat.model_scale(id), Some(cat.model(id).unwrap().scale));
+        }
+        // A real product still multiplies through.
+        cat.display.insert(6, display_row(50, 1.5));
+        assert_eq!(cat.model(6).unwrap().scale, 3.0);
+    }
+
+    /// **The shipped Gilneas displays resolve** (B73): 20263 names `HumanMale.mdx` at scale 1.0.
+    /// Skips when no Turtle install is found (`WOW_DATA`).
+    #[test]
+    fn gilneas_displays_with_zero_scale_resolve_to_a_model() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let cat = load_creature_catalog(&mut chain).expect("load creature catalog");
+        let Some(m) = cat.model(20263) else {
+            eprintln!("skipping: display 20263 is not in this client (not Turtle data)");
+            return;
+        };
+        assert!(
+            m.model_path.eq_ignore_ascii_case(r"Character\Human\Male\HumanMale.mdx"),
+            "display 20263 names {}",
+            m.model_path
+        );
+        assert_eq!(m.scale, 1.0);
+        assert_eq!(cat.model_scale(20263), Some(1.0));
+    }
 
     /// **The blood-row tier populations** over the shipped tables — the measurement behind 1850.
     /// `CreatureModelData.BloodID = −1` (122 of 430 models) is a tier-2 *miss*, not a bloodless
