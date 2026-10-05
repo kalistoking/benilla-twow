@@ -218,6 +218,8 @@ pub(crate) struct ActionStores<'w> {
 #[derive(SystemParam)]
 pub(crate) struct AnimWriters<'w> {
     pub server_sounds: MessageWriter<'w, ServerSoundMessage>,
+    /// The embedder's wire tap (`crate::net::HostWire`): the spell and sound packets as they came.
+    pub host_wire: MessageWriter<'w, crate::net::HostWire>,
     pub weather: MessageWriter<'w, WeatherMessage>,
     pub emotes: MessageWriter<'w, EmoteMessage>,
     pub swings: MessageWriter<'w, crate::creature_anim::SwingMessage>,

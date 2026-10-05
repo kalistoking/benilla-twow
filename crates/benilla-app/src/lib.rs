@@ -300,6 +300,9 @@ pub use target::{HostClickOutcome, HostClickTarget, HostRightClick, HostRightCli
 pub use target::{HostUseObject, HostUsedObject};
 /// What the player cast while no server listens -- for a host that plays the server itself.
 pub use net::HostCast;
+/// What the server told the client -- the spell packets and the pushed sounds, raw, for a host
+/// that writes them down. See [`net::HostWire`].
+pub use net::{HostSoundKind, HostWire};
 /// An embedder's word to end the live session and go to the login screen, and whether one is
 /// live -- for a host that switches between a server's world and its own.
 pub use login::EndSession;

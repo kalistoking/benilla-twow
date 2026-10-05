@@ -228,6 +228,7 @@ impl Plugin for NetPlugin {
             .add_message::<MoveModeMessage>()
             .add_message::<KnockBackMessage>()
             .add_message::<ServerSoundMessage>()
+            .add_message::<HostWire>()
             .add_message::<EmoteMessage>()
             .add_message::<AiReactionMessage>()
             .add_message::<PetTalkMessage>()
@@ -3015,6 +3016,51 @@ pub(crate) enum ServerSoundKind {
     Sound2d,
     Music,
     ObjectSound,
+}
+
+/// **What the server told the client**, for an embedder to write down (trt's test runs): the raw
+/// guids and ids of the spell packets and the pushed sounds, written by [`apply_net_updates`]
+/// before any gate -- before a streamed-or-not lookup, before a cast-time branch -- so what the
+/// client's own consumers drop or ignore is still in it. Read-only: nothing in the client reads
+/// this, and a message nobody reads is dropped by Bevy.
+#[derive(Message, Clone, Debug, PartialEq, Eq)]
+pub enum HostWire {
+    /// `SMSG_SPELL_START`: a cast began (any caster).
+    SpellStart {
+        caster: u64,
+        spell_id: u32,
+        target: Option<u64>,
+    },
+    /// `SMSG_SPELL_GO`: the cast launched, with its hit list and its miss list (`SpellMissInfo`
+    /// byte per target -- 7 and 8 are both immune).
+    SpellGo {
+        caster: u64,
+        spell_id: u32,
+        hits: Vec<u64>,
+        misses: Vec<(u64, u8)>,
+    },
+    /// Our own `SMSG_CAST_RESULT` failure (`reason` is the `SpellCastResult` byte; `255` when
+    /// the packet carried none).
+    CastFailed { spell_id: u32, reason: u8 },
+    /// `SMSG_PLAY_SOUND` / `PLAY_MUSIC` / `PLAY_OBJECT_SOUND`, as sent; `source` is the object's
+    /// guid for an object sound, whether or not it is streamed to us.
+    Sound {
+        kind: HostSoundKind,
+        sound_id: u32,
+        source: Option<u64>,
+    },
+    /// What the music slot did with a pushed track: `started` is `start_music_stream`'s answer
+    /// (`sound::zone`) -- `false` when the slot already held the kit, or nothing could start (a
+    /// suppression, no mixer, no file for the kit, the world-hold cover).
+    MusicStarted { sound_id: u32, started: bool },
+}
+
+/// Which of the three pushes a [`HostWire::Sound`] was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostSoundKind {
+    Sound2d,
+    Music,
+    Object,
 }
 
 /// A nearby unit's emote (`SMSG_TEXT_EMOTE` / `SMSG_EMOTE`, bridged from the Net drain), guid

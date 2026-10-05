@@ -57,7 +57,7 @@ use bevy::prelude::*;
 
 use benilla_formats::AreaSoundCatalog;
 
-use crate::net::{ServerSoundKind, ServerSoundMessage};
+use crate::net::{HostWire, ServerSoundKind, ServerSoundMessage};
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 use benilla_world::lighting::GameClock;
 use benilla_world::schedule::WorldStage;
@@ -1051,6 +1051,7 @@ fn lua_music(
 /// its own rotation after the pushed track ends, via the normal silence interval).
 fn server_sounds(
     mut msgs: MessageReader<ServerSoundMessage>,
+    mut wire: MessageWriter<HostWire>,
     mut zone: NonSendMut<ZoneAudio>,
     mut out: NonSendMut<SoundOutput>,
     kits: Option<ResMut<SoundKits>>,
@@ -1066,10 +1067,12 @@ fn server_sounds(
     // the reference's blocking load hears none of these, and the recurring pushes (the Darkmoon
     // Faire emitter re-pushes every 5 s) re-arrive on their own after the reveal.
     if config.world_hold {
+        music_not_started(&mut msgs, &mut wire);
         msgs.clear();
         return;
     }
     let (Some(mut kits), Some(assets)) = (kits, assets) else {
+        music_not_started(&mut msgs, &mut wire);
         return;
     };
     let listener = listener.pos;
@@ -1085,9 +1088,18 @@ fn server_sounds(
                     m.sound_id,
                     zone.music.as_ref().map(|h| h.state()),
                 ) {
+                    wire.write(HostWire::MusicStarted {
+                        sound_id: m.sound_id,
+                        started: false,
+                    });
                     continue;
                 }
-                start_music_stream(&mut zone, &mut out, &mut kits, &assets, &config, m.sound_id);
+                let started =
+                    start_music_stream(&mut zone, &mut out, &mut kits, &assets, &config, m.sound_id);
+                wire.write(HostWire::MusicStarted {
+                    sound_id: m.sound_id,
+                    started,
+                });
             }
             ServerSoundKind::Sound2d | ServerSoundKind::ObjectSound => {
                 // Object sounds position at the source entity when it's streamed to us;
@@ -1128,6 +1140,23 @@ fn server_sounds(
                     warn!("server sound {}: {e:#}", m.sound_id);
                 }
             }
+        }
+    }
+}
+
+/// The embedder's tap for the pushes [`server_sounds`] cannot even try (the world-hold cover, no
+/// kit table or assets yet): each music push is told as not started, so a host can tell "refused"
+/// from "never arrived".
+fn music_not_started(
+    msgs: &mut MessageReader<ServerSoundMessage>,
+    wire: &mut MessageWriter<HostWire>,
+) {
+    for m in msgs.read() {
+        if m.kind == ServerSoundKind::Music {
+            wire.write(HostWire::MusicStarted {
+                sound_id: m.sound_id,
+                started: false,
+            });
         }
     }
 }

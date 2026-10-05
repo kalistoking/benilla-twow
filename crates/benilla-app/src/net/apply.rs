@@ -20,6 +20,7 @@ mod combat_chat;
 mod combat_log;
 mod death;
 mod group;
+mod host_wire;
 mod mount;
 mod names;
 mod objects;
@@ -144,6 +145,7 @@ fn apply_unpeeled(
     } = actions;
     let AnimWriters {
         mut server_sounds,
+        mut host_wire,
         weather: mut weather_msgs,
         mut emotes,
         mut swings,
@@ -177,6 +179,8 @@ fn apply_unpeeled(
     // A `&mut` to the counter itself (deref-coerced through the `ResMut`), so the arms that stamp
     // it *conditionally* can take it by reference and only advance it when they emit.
     let play_seq: &mut crate::creature_anim::PlaySeq = &mut play_seq;
+    // The embedder's wire tap, before any arm: what no gate below can hide from the host.
+    host_wire::tap(&events, &mut host_wire);
     let WindowStores {
         mut names,
         mut items,
