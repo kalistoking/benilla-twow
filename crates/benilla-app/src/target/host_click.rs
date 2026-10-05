@@ -80,7 +80,7 @@ pub(super) struct HostClickAim(Option<u64>);
 
 /// The creature (`HIGH_UNIT`) or gameobject (`HIGH_GAMEOBJECT`) in the index whose database guid
 /// -- the low 24 bits -- is `db`, whatever entry its guid carries.
-fn find_by_db_guid(index: &GuidIndex, high: u16, db: u32) -> Option<(Entity, u64)> {
+pub(super) fn find_by_db_guid(index: &GuidIndex, high: u16, db: u32) -> Option<(Entity, u64)> {
     index
         .0
         .iter()

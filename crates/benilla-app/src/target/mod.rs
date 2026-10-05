@@ -93,6 +93,9 @@ pub use host_pick::{HostGroundPick, HostGroundPicked, HostObjectClicked};
 /// A host's right-click on a creature or gameobject -- see [`host_click`].
 mod host_click;
 pub use host_click::{HostClickOutcome, HostClickTarget, HostRightClick, HostRightClicked};
+/// A host's use of a gameobject the client would grey out -- see [`host_use`].
+mod host_use;
+pub use host_use::{HostUseObject, HostUsedObject};
 // `pub(crate)` for the same reason as `cursor_mode`: the faction catalog is one of
 // [`cursor_mode::go_highlightable`]'s three inputs, so the inspector needs it to run the real gate.
 pub(crate) mod ring;
@@ -447,9 +450,13 @@ impl Plugin for TargetPlugin {
             .add_message::<HostGroundPicked>()
             .add_message::<HostObjectClicked>()
             .add_message::<HostRightClicked>()
+            .add_message::<HostUsedObject>()
             .add_message::<TargetByNameRequest>()
             .add_message::<AssistRequest>()
             .add_message::<click::DeselectGuid>()
+            // A host's gameobject use: no pick, no classifier -- just the packet. Its own call,
+            // as the big tuple below is at Bevy's 20-tuple limit.
+            .add_systems(Update, host_use::use_object)
             .add_systems(
                 Startup,
                 (

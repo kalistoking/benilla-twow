@@ -295,6 +295,9 @@ pub use target::{HostGroundPick, HostGroundPicked, HostObjectClicked};
 /// A host's right-click on a creature or gameobject, and what the cursor said about it. See
 /// [`target::HostRightClick`].
 pub use target::{HostClickOutcome, HostClickTarget, HostRightClick, HostRightClicked};
+/// A host's use of a gameobject by database guid, sent as the GM's hand -- no classifier, no
+/// range gate -- and its confirmation. See [`target::HostUseObject`].
+pub use target::{HostUseObject, HostUsedObject};
 /// What the player cast while no server listens -- for a host that plays the server itself.
 pub use net::HostCast;
 /// An embedder's word to end the live session and go to the login screen, and whether one is
