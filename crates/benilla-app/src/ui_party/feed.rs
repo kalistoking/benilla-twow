@@ -332,6 +332,7 @@ pub(super) fn feed_party(
                 &group,
                 own_group.clone(),
                 chr,
+                names.player_traits(m.guid).map(|(_, class, _)| class),
             )
         });
         if fed.units[i] != snap {
@@ -416,6 +417,7 @@ pub(super) fn feed_party(
                     &group,
                     own_group.clone(),
                     chr,
+                    names.player_traits(m.guid).map(|(_, class, _)| class),
                 ))
             }
         });
@@ -802,7 +804,14 @@ fn member_unit_state(
     // in-range leg can use it; the out-of-range roster record carries no class byte to key on,
     // so an out-of-range paladin reads no relic slot until their object streams back.
     classes: Option<&benilla_formats::ChrClasses>,
+    // The member's class byte from the name cache (`SMSG_NAME_QUERY_RESPONSE`), the same source
+    // `raid_roster` gives `GetRaidRosterInfo`. The out-of-range leg answers `UnitClass` from it,
+    // as the client does: without it `raid<N>` named a row `GetRaidRosterInfo(N)` listed with a
+    // class, and `UnitClass("raid<N>")` said nil -- Turtle's `LootFrame_UpdateRoster`
+    // (`LootFrame.lua:129-132`) indexes its roster by that token and raised a script error.
+    class_byte: Option<u8>,
 ) -> UnitState {
+    let class = class_byte.and_then(crate::ui_unit::class_names);
     let mut s = match store {
         // In visibility range: the live descriptor is the truth (the server keeps it current).
         Some(store) => crate::ui_unit::snapshot(store, Some(m.name.clone()), 0, classes),
@@ -845,6 +854,8 @@ fn member_unit_state(
             // pair worth reading.
             dead: stats.is_some_and(|s| s.status.unwrap_or(0) & member_status::DEAD != 0),
             ghost: stats.is_some_and(|s| s.status.unwrap_or(0) & member_status::GHOST != 0),
+            class: class.map(|(n, _)| n.to_string()),
+            class_file: class.map(|(_, f)| f.to_string()),
             ..Default::default()
         },
     };
@@ -1584,7 +1595,7 @@ mod tests {
             max_power: Some(1000),
             ..PartyMemberStatsInfo::default()
         };
-        let s = member_unit_state(&m, Some(&record), None, &GroupState::default(), None, None);
+        let s = member_unit_state(&m, Some(&record), None, &GroupState::default(), None, None, None);
         assert_eq!(
             (s.health, s.max_health),
             (2400, 3000),
@@ -1601,9 +1612,18 @@ mod tests {
         // And a member with no record at all still reads as an existing, connected player — the
         // seat law means this cannot happen for a real roster, but the mapping must not invent
         // numbers when it does.
-        let bare = member_unit_state(&m, None, None, &GroupState::default(), None, None);
+        let bare = member_unit_state(&m, None, None, &GroupState::default(), None, None, None);
         assert_eq!((bare.health, bare.max_health, bare.power), (0, 0, 0));
         assert!(bare.exists);
+
+        // Out of range, the class comes off the name cache -- `UnitClass("raid<N>")` must agree
+        // with `GetRaidRosterInfo(N)`, which reads the same byte (B100: LootFrame.lua:132).
+        let warrior = member_unit_state(&m, None, None, &GroupState::default(), None, None, Some(1));
+        assert_eq!(
+            (warrior.class.as_deref(), warrior.class_file.as_deref()),
+            (Some("Warrior"), Some("WARRIOR"))
+        );
+        assert_eq!(bare.class_file, None, "no cached class byte, no class");
     }
 
     /// **The record's dead/ghost bits are read out of range** — `UnitIsDead 0x517b5d` (`+0x08 &
@@ -1628,7 +1648,7 @@ mod tests {
             status: Some(member_status::ONLINE | member_status::DEAD),
             ..PartyMemberStatsInfo::default()
         };
-        let s = member_unit_state(&m, Some(&dead), None, &GroupState::default(), None, None);
+        let s = member_unit_state(&m, Some(&dead), None, &GroupState::default(), None, None, None);
         assert!(
             s.dead,
             "the record says dead even though the roster echo does not"
@@ -1639,7 +1659,7 @@ mod tests {
             status: Some(member_status::ONLINE | member_status::GHOST),
             ..PartyMemberStatsInfo::default()
         };
-        let s = member_unit_state(&m, Some(&ghost), None, &GroupState::default(), None, None);
+        let s = member_unit_state(&m, Some(&ghost), None, &GroupState::default(), None, None, None);
         assert!(s.ghost);
         assert!(!s.dead, "a released ghost is not `dead` — the 0308 §1 trio");
 
@@ -1654,6 +1674,7 @@ mod tests {
             Some(&PartyMemberStatsInfo::placeholder(true)),
             None,
             &GroupState::default(),
+            None,
             None,
             None,
         );
