@@ -156,7 +156,33 @@ pub(super) fn step(
         GROUND_PROBE
     };
     let ground_reach = hover_offset + base_reach;
-    let classify = probe_down(center, ground_reach);
+    let mut classify = probe_down(center, ground_reach);
+    // **Arrival seat** (B72): the first free frame after a settle hold lifts a body whose feet are a
+    // hair under the floor onto it. The one-sided sweep ignores a floor more than `1/36` yd above the
+    // feet ([`benilla_world::collision`]'s back-face band), so a server spawn Z 0.09 yd under the
+    // floor misses the classify above and the body falls through the world. The reference's walk
+    // resolver `0x6367b0` settles from at least `H + 1/36` above the body and stands on that floor;
+    // this is that probe, once per arrival. It only lifts — a floor at or below the feet is the
+    // classify's business — and the flag is spent whether it lifted or not.
+    if player.arrival_seat && !player.settling {
+        player.arrival_seat = false;
+        if !classify.as_ref().is_some_and(|h| h.normal1.y >= GROUND_COS) {
+            const ARRIVAL_LIFT: f32 = STEP_UP_HEIGHT + 1.0 / 36.0;
+            let from = center + Vec3::Y * ARRIVAL_LIFT;
+            if let Some(h) = probe_down(from, ARRIVAL_LIFT + ground_reach)
+                .filter(|h| h.normal1.y >= GROUND_COS && h.distance < ARRIVAL_LIFT)
+            {
+                let lift = ARRIVAL_LIFT - h.distance;
+                center.y += lift;
+                player.pos.y += lift;
+                info!(
+                    "settle: arrival seated +{lift:.3} yd onto the floor at y {:.3}",
+                    center.y - half_h.y
+                );
+                classify = probe_down(center, ground_reach);
+            }
+        }
+    }
     let on_walkable = classify.as_ref().is_some_and(|h| h.normal1.y >= GROUND_COS);
     // **Water walking: the liquid surface is GROUND, and the classify above has to see it**
     // (decision 1611, correcting 0866). In the reference the surface is not a special case at all
@@ -2322,6 +2348,75 @@ mod tests {
             (dropped - (SURFACE + HOVER_HEIGHT)).abs() < 1.0e-3,
             "a hovering water-walker dropped in from above stops on the hover line: {dropped}"
         );
+    }
+
+    /// Run `frames` idle steps of a body whose feet start at `feet_y` over a flat floor at y = 0.
+    /// `arriving` = the body has just come out of a settle hold (one held frame, then the release
+    /// through [`Player::end_settle`], as the terrain streamer does). Returns the final feet height,
+    /// whether the last frame was grounded, and the `arrival_seat` flag the run left behind.
+    fn idle_over_flat_floor(feet_y: f32, arriving: bool, frames: usize) -> (f32, bool, bool) {
+        const FLAT: [(f32, f32); 2] = [(-3.0, 0.0), (3.0, 0.0)];
+        world_from_profile(&FLAT)
+            .world_mut()
+            .run_system_once(move |world: benilla_world::collision::WorldCollision| {
+                let capsule = player_capsule();
+                let mut time = Time::default();
+                time.advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+                let mut player = Player {
+                    pos: Vec3::new(0.0, feet_y, 0.0),
+                    settling: arriving,
+                    ..Default::default()
+                };
+                let mut grounded = false;
+                for frame in 0..frames {
+                    if arriving && frame == 1 {
+                        player.end_settle(true, 0.0);
+                    }
+                    grounded = step(
+                        &mut player,
+                        &time,
+                        &world,
+                        &capsule,
+                        false,
+                        Vec3::ZERO,
+                        7.0,
+                        false,
+                        false,
+                        None,
+                        None,
+                        AIR_NUDGE_SPEED,
+                    )
+                    .grounded;
+                }
+                (player.pos.y, grounded, player.arrival_seat)
+            })
+            .unwrap()
+    }
+
+    /// **B72, the arrival seat**: a worldport spawn a few hundredths under the floor must stand on
+    /// it, not fall through the world. The one-sided sweep ignores a floor more than 1/36 yd above
+    /// the feet, so the first free frame's classify misses; the seat probes from `H + 1/36` up.
+    #[test]
+    fn an_arrival_a_hair_under_the_floor_is_seated_onto_it() {
+        let (y, grounded, seat) = idle_over_flat_floor(-0.09, true, 60);
+        assert!(y >= -0.001, "the body must stand on the floor, not fall: y = {y}");
+        assert!(grounded, "and be grounded on it: y = {y}");
+        assert!(!seat, "the seat is spent once it has run");
+    }
+
+    /// The seat is not a general depenetrator: a body well below the lift's reach still falls.
+    #[test]
+    fn an_arrival_far_under_the_floor_still_falls() {
+        let (y, _, seat) = idle_over_flat_floor(-1.5, true, 60);
+        assert!(y < -1.5, "a body 1.5 yd under the floor is not lifted: y = {y}");
+        assert!(!seat, "the flag is spent whether it lifted or not");
+    }
+
+    /// Only an arrival is seated: a body that is merely standing a hair under a floor is not lifted.
+    #[test]
+    fn a_floor_above_a_body_that_is_not_arriving_is_not_a_lift() {
+        let (y, _, _) = idle_over_flat_floor(-0.5, false, 1);
+        assert!(y < -0.4, "no arrival, no seat: y = {y}");
     }
 
     /// **B322, the lift** (decision 1616): the director's *"it doesn't bring you to surface when

@@ -861,6 +861,14 @@ pub(crate) struct Player {
     /// stall budget: it is re-pushed all through a live stream, so "deadline minus timeout" names
     /// the last push, not the arrival.
     pub(crate) settle_since: f32,
+    /// **The first free frame after a settle hold seats the body on a floor a hair above its feet**
+    /// (B72). Set by [`Self::end_settle`] — worldport, near teleport, login, cinematic and the stall
+    /// backstop all end there — and spent by the mover's first step after the release, whether it
+    /// lifted or not. A server spawn Z a few hundredths under the floor is common data, and the
+    /// one-sided sweep ignores a floor more than `1/36` yd above the feet, so without the seat the
+    /// first ground classify misses and the body falls through the world. The reference's walk
+    /// resolver `0x6367b0` settles from at least `H + 1/36` above the body, so it stands on that floor.
+    pub(crate) arrival_seat: bool,
     /// **The colliders under our feet may still belong to the map we just left.** Set at every
     /// snap, cleared by the terrain streamer once the destination's own world is resident.
     ///
@@ -1234,6 +1242,7 @@ impl Player {
     /// the whole diagnosis of a fall-through report, so it goes through the `sett` trace either way.
     pub(crate) fn end_settle(&mut self, resident: bool, now: f32) {
         self.settling = false;
+        self.arrival_seat = true;
         let waited = now - self.settle_since;
         super::move_trace::settle(resident, waited, self.pos);
     }
