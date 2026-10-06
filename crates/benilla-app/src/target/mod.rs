@@ -98,7 +98,7 @@ mod host_use;
 pub use host_use::{HostUseObject, HostUsedObject};
 /// A host's turn to the current target, and its answer -- see [`host_face`].
 mod host_face;
-pub use host_face::{HostFaceTarget, HostFacedTarget};
+pub use host_face::{HostFaceTarget, HostFacedTarget, TargetSize};
 // `pub(crate)` for the same reason as `cursor_mode`: the faction catalog is one of
 // [`cursor_mode::go_highlightable`]'s three inputs, so the inspector needs it to run the real gate.
 pub(crate) mod ring;

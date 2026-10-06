@@ -882,9 +882,30 @@ pub(crate) struct CameraControl {
     /// [`run_look_session`], exactly as the reference's input handler reads the flags the last
     /// driver pass left (`0x50fee0`'s sole caller `0x514446` precedes the mover lookup).
     pub(super) clipped: bool,
+    /// **A host's framing park past the zoom ceiling** ([`Self::park_framed`]) -- the distance a
+    /// test lab's turn to its target put the camera at, which [`apply_zoom_scroll`]'s per-frame
+    /// re-clamp admits as a ceiling of its own. Without it a park beyond [`ZoomLimit::max`] (15 yd
+    /// at rest) glides back in at `cameraDistanceMoveSpeed` within the second, and a giant framed
+    /// whole is framed from the knees again. Dropped by the first wheel or zoom-key notch: the
+    /// hand takes the zoom back, and the ordinary ceiling with it. `None` in every ordinary game.
+    pub(super) host_ceiling: Option<f32>,
 }
 
 impl CameraControl {
+    /// Park the orbit distance at `d` for a host's framing (`target::host_face`), past the zoom
+    /// ceiling if need be: [`Self::park_distance`], and `d` held as a ceiling the per-frame
+    /// re-clamp respects until the wheel next moves ([`Self::host_ceiling`]).
+    pub(crate) fn park_framed(&mut self, d: f32) {
+        self.park_distance(d);
+        self.host_ceiling = Some(d);
+    }
+
+    /// The orbit distance the rig is parked at and gliding to -- for a host's tests.
+    #[cfg(test)]
+    pub(crate) fn parked(&self) -> (f32, f32) {
+        (self.distance, self.target_distance)
+    }
+
     /// Park the orbit distance at `d` — **both** the live value and the wheel target.
     ///
     /// Both, or the wheel glide eases `distance` back toward the old target every frame and a
@@ -1317,6 +1338,12 @@ pub(super) fn run_look_session(
 /// line-equivalents — the binding dispatch normalizes trackpad pixels — or the 1.12 key step of
 /// 1.0 per press; positive = closer), so a rebound zoom key feels exactly like a wheel notch.
 pub(super) fn apply_zoom_scroll(scroll: f32, dt: f32, rig: &mut CameraControl, max: f32) {
+    // A host's framing park ([`CameraControl::park_framed`]) is a ceiling of its own until the
+    // hand moves the zoom; the first notch gives the ceiling back to the slider.
+    if scroll != 0.0 {
+        rig.host_ceiling = None;
+    }
+    let max = rig.host_ceiling.map_or(max, |c| max.max(c));
     if scroll != 0.0 {
         rig.target_distance =
             (rig.target_distance - scroll * CAM_ZOOM_STEP).clamp(CAM_DIST_MIN, max);
@@ -2039,6 +2066,34 @@ mod tests {
         (0..(secs / dt).round() as usize)
             .map(|_| g.advance(target, dt))
             .collect()
+    }
+
+    /// A host's framing park past the slider's ceiling (`target::host_face`, a giant framed whole
+    /// from 30 yd) survives the per-frame re-clamp -- and the first wheel notch hands the zoom
+    /// back to the slider, the camera then gliding in to it.
+    #[test]
+    fn a_framed_park_past_the_ceiling_holds_until_the_wheel_moves() {
+        let mut rig = CameraControl::default();
+        let max = ZoomLimit::default().max;
+        rig.park_framed(30.0);
+        for _ in 0..120 {
+            apply_zoom_scroll(0.0, 1.0 / 60.0, &mut rig, max);
+        }
+        assert_eq!(rig.parked(), (30.0, 30.0), "two seconds of frames, no hand: it holds");
+        apply_zoom_scroll(1.0, 1.0 / 60.0, &mut rig, max);
+        assert_eq!(rig.host_ceiling, None);
+        assert_eq!(rig.target_distance, max, "the notch re-clamps to the slider's ceiling");
+        assert!(rig.distance < 30.0 && rig.distance > max, "and the glide walks in: {}", rig.distance);
+    }
+
+    /// A plain park (the probe camera's, the spyglass's) is no ceiling: past the slider it is
+    /// pulled back in, as before.
+    #[test]
+    fn a_plain_park_past_the_ceiling_is_still_pulled_in() {
+        let mut rig = CameraControl::default();
+        rig.park_distance(30.0);
+        apply_zoom_scroll(0.0, 1.0 / 60.0, &mut rig, ZoomLimit::default().max);
+        assert_eq!(rig.target_distance, ZoomLimit::default().max);
     }
 
     /// **The report** (the director, on the reference vs ours): shifting form on the real client

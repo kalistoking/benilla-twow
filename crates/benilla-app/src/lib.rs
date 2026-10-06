@@ -300,7 +300,7 @@ pub use target::{HostClickOutcome, HostClickTarget, HostRightClick, HostRightCli
 pub use target::{HostUseObject, HostUsedObject};
 /// A host's turn to the current target -- the player's own turn, sent as `MSG_MOVE_SET_FACING`,
 /// with the camera put behind -- and what it did. See [`target::HostFaceTarget`].
-pub use target::{HostFaceTarget, HostFacedTarget};
+pub use target::{HostFaceTarget, HostFacedTarget, TargetSize};
 /// What the player cast while no server listens -- for a host that plays the server itself.
 pub use net::HostCast;
 /// What the server told the client -- the spell packets and the pushed sounds, raw, for a host
