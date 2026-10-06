@@ -1071,8 +1071,10 @@ fn server_sounds(
         msgs.clear();
         return;
     }
+    // No kit table or assets yet: leave the pushes unread, so the reader hands them over again
+    // next frame and a music push that beats the kits still plays then. Reporting them here would
+    // consume them and drop the track for good (ac0caf4a did, until the director's review).
     let (Some(mut kits), Some(assets)) = (kits, assets) else {
-        music_not_started(&mut msgs, &mut wire);
         return;
     };
     let listener = listener.pos;
@@ -1144,9 +1146,9 @@ fn server_sounds(
     }
 }
 
-/// The embedder's tap for the pushes [`server_sounds`] cannot even try (the world-hold cover, no
-/// kit table or assets yet): each music push is told as not started, so a host can tell "refused"
-/// from "never arrived".
+/// The embedder's tap for the pushes [`server_sounds`] drops under the world-hold cover: each
+/// music push is told as not started, so a host can tell "refused" from "never arrived". Only
+/// there -- the cover clears the pushes anyway, while without kits they wait unread for a frame.
 fn music_not_started(
     msgs: &mut MessageReader<ServerSoundMessage>,
     wire: &mut MessageWriter<HostWire>,
@@ -1271,6 +1273,66 @@ mod tests {
         CINEMATIC_MUSIC_RESUME_SECS, LUA_MUSIC_SCHEDULE_SECS,
     };
     use kira::sound::PlaybackState;
+
+    /// **A music push that beats the kit table waits for it** (the director's review of
+    /// `ac0caf4a`): with no kits or assets yet, [`super::server_sounds`] leaves the push unread
+    /// and reports nothing, so the reader hands the same push over again on the next frame -- here
+    /// under the world-hold cover, the one place that reports a push as not started.
+    #[test]
+    fn a_music_push_before_the_kits_load_stays_unread_for_the_next_frame() {
+        use super::super::{AudioListener, SoundConfig, SoundOutput};
+        use crate::net::{HostWire, ServerSoundKind, ServerSoundMessage};
+        use bevy::ecs::message::Messages;
+        use bevy::prelude::*;
+
+        fn push_once(mut done: Local<bool>, mut out: MessageWriter<ServerSoundMessage>) {
+            if !std::mem::replace(&mut *done, true) {
+                out.write(ServerSoundMessage {
+                    kind: ServerSoundKind::Music,
+                    sound_id: 7,
+                    source: None,
+                });
+            }
+        }
+        fn told(app: &App) -> Vec<HostWire> {
+            let wire = app.world().resource::<Messages<HostWire>>();
+            wire.iter_current_update_messages().cloned().collect()
+        }
+
+        let mut app = App::new();
+        app.add_message::<ServerSoundMessage>()
+            .add_message::<HostWire>()
+            .insert_non_send_resource(ZoneAudio::default())
+            .insert_non_send_resource(SoundOutput {
+                mixer: None,
+                channels: Vec::new(),
+                probe: None,
+                zone_streams: 0,
+                glue_streams: 0,
+                cinematic_streams: 0,
+                voices_stolen: 0,
+                voices_denied: 0,
+                copies_dropped: 0,
+            })
+            .init_resource::<SoundConfig>()
+            .init_resource::<AudioListener>()
+            .add_systems(Update, (push_once, super::server_sounds).chain());
+
+        // No kits, no assets: nothing is told, and the push is not consumed.
+        app.update();
+        assert_eq!(told(&app), Vec::new(), "a push without kits must wait, not be reported");
+
+        // Next frame the same push is still there to read.
+        app.world_mut().resource_mut::<SoundConfig>().world_hold = true;
+        app.update();
+        assert_eq!(
+            told(&app),
+            vec![HostWire::MusicStarted {
+                sound_id: 7,
+                started: false
+            }]
+        );
+    }
 
     /// **The cinematic's music stop, both edges** — wow-re `cinematic-audio-law.md`, VERIFIED.
     /// Down is a CUT: `0x7a5700` is stop-and-destroy and takes no duration argument, so there is
