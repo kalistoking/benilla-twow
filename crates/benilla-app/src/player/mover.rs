@@ -162,12 +162,15 @@ pub(super) fn step(
     // feet ([`benilla_world::collision`]'s back-face band), so a server spawn Z 0.09 yd under the
     // floor misses the classify above and the body falls through the world. The reference's walk
     // resolver `0x6367b0` settles from at least `H + 1/36` above the body and stands on that floor;
-    // this is that probe, once per arrival. It only lifts — a floor at or below the feet is the
-    // classify's business — and the flag is spent whether it lifted or not.
+    // this is that probe, once per arrival, but capped at a quarter yard rather than `H + 1/36`
+    // (~1.03 yd): what it mends is a server Z a few hundredths low, and a floor a yard over the
+    // feet on arrival is more likely another storey than the one the server meant (the director's
+    // review of B72). It only lifts — a floor at or below the feet is the classify's business —
+    // and the flag is spent whether it lifted or not.
     if player.arrival_seat && !player.settling {
         player.arrival_seat = false;
         if !classify.as_ref().is_some_and(|h| h.normal1.y >= GROUND_COS) {
-            const ARRIVAL_LIFT: f32 = STEP_UP_HEIGHT + 1.0 / 36.0;
+            const ARRIVAL_LIFT: f32 = 0.25;
             let from = center + Vec3::Y * ARRIVAL_LIFT;
             if let Some(h) = probe_down(from, ARRIVAL_LIFT + ground_reach)
                 .filter(|h| h.normal1.y >= GROUND_COS && h.distance < ARRIVAL_LIFT)
@@ -2395,13 +2398,30 @@ mod tests {
 
     /// **B72, the arrival seat**: a worldport spawn a few hundredths under the floor must stand on
     /// it, not fall through the world. The one-sided sweep ignores a floor more than 1/36 yd above
-    /// the feet, so the first free frame's classify misses; the seat probes from `H + 1/36` up.
+    /// the feet, so the first free frame's classify misses; the seat probes from a quarter yard up.
     #[test]
     fn an_arrival_a_hair_under_the_floor_is_seated_onto_it() {
         let (y, grounded, seat) = idle_over_flat_floor(-0.09, true, 60);
         assert!(y >= -0.001, "the body must stand on the floor, not fall: y = {y}");
         assert!(grounded, "and be grounded on it: y = {y}");
         assert!(!seat, "the seat is spent once it has run");
+    }
+
+    /// Just inside the quarter-yard cap: still seated.
+    #[test]
+    fn an_arrival_just_inside_the_cap_is_seated_onto_the_floor() {
+        let (y, grounded, _) = idle_over_flat_floor(-0.2, true, 60);
+        assert!(y >= -0.001, "0.2 yd under is inside the cap: y = {y}");
+        assert!(grounded, "and grounded on the floor: y = {y}");
+    }
+
+    /// Near the old reach (`STEP_UP_HEIGHT + 1/36`, ~1.03 yd) but past the cap: not lifted a
+    /// storey's worth onto a floor the server did not mean.
+    #[test]
+    fn an_arrival_most_of_a_yard_under_the_floor_is_not_seated() {
+        let (y, _, seat) = idle_over_flat_floor(-0.9, true, 60);
+        assert!(y < -0.9, "0.9 yd under is past the cap: y = {y}");
+        assert!(!seat, "the flag is spent whether it lifted or not");
     }
 
     /// The seat is not a general depenetrator: a body well below the lift's reach still falls.
