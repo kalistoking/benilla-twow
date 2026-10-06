@@ -1,7 +1,7 @@
-//! **The embedder's wire tap** -- [`HostWire`], one message per spell or sound packet, written
-//! from the drain's own events before any arm runs, so no gate an arm has (a streamed-or-not
-//! lookup, a cast-time branch, a music slot that already holds the kit) can hide a packet from
-//! the host. Read-only: no arm reads it back, and a message nobody reads is dropped by Bevy.
+//! **The embedder's wire tap** -- [`HostWire`], one message per spell, sound or swing-refusal
+//! packet, written from the drain's own events before any arm runs, so no gate an arm has (a
+//! streamed-or-not lookup, a cast-time branch, a music slot that already holds the kit) can hide
+//! a packet from the host. Read-only: no arm reads it back, and a message nobody reads is dropped by Bevy.
 
 use benilla_protocol::SessionEvent;
 use bevy::prelude::*;
@@ -59,6 +59,7 @@ fn wire_of(ev: &SessionEvent) -> Option<HostWire> {
             sound_id: *sound_id,
             source: Some(*guid),
         },
+        SessionEvent::AttackSwingError(e) => HostWire::SwingRefused(*e),
         _ => return None,
     })
 }
@@ -204,6 +205,15 @@ mod tests {
 
     /// Through the real drain on the built client: the packets reach the host's message queue in
     /// wire order, whatever the arms then do with them.
+    /// A refused swing is told by its kind -- the facing and the range are what a lab gets wrong.
+    #[test]
+    fn a_refused_swing_is_told_by_its_kind() {
+        use benilla_protocol::AttackSwingError as E;
+        for e in [E::BadFacing, E::NotInRange, E::DeadOrUnattackable] {
+            assert_eq!(wire_of(&SessionEvent::AttackSwingError(e)), Some(HostWire::SwingRefused(e)));
+        }
+    }
+
     #[test]
     fn the_drain_tells_the_host_in_packet_order() {
         let mut app = crate::game_plugins::schedule_tests::headless_client();

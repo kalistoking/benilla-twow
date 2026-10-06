@@ -3053,6 +3053,10 @@ pub enum HostWire {
     /// (`sound::zone`) -- `false` when the slot already held the kit, or nothing could start (a
     /// suppression, no mixer, no file for the kit, the world-hold cover).
     MusicStarted { sound_id: u32, started: bool },
+    /// The server refused our melee swing (`SMSG_ATTACKSWING_NOTINRANGE` / `_BADFACING` /
+    /// `_DEADTARGET` / `_CANT_ATTACK`) -- a swing lost, which the client only tells as a red line
+    /// of text.
+    SwingRefused(benilla_protocol::AttackSwingError),
 }
 
 /// Which of the three pushes a [`HostWire::Sound`] was.

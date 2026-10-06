@@ -1054,6 +1054,18 @@ impl FlyCam {
         self.yaw = yaw;
         self.pitch = pitch;
     }
+
+    /// A rig at `yaw`/`pitch`, for a test of a lever outside this module (`target::host_face`).
+    #[cfg(test)]
+    pub(crate) fn at(yaw: f32, pitch: f32) -> FlyCam {
+        FlyCam { yaw, pitch, speed: 0.0 }
+    }
+
+    /// The rig's yaw and pitch, for the same tests.
+    #[cfg(test)]
+    pub(crate) fn aim(&self) -> (f32, f32) {
+        (self.yaw, self.pitch)
+    }
 }
 
 /// The per-model camera-pivot height in **model-local yards, pre-scale** — `attach17.z + 0.0972` (M2

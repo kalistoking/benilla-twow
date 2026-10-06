@@ -96,6 +96,9 @@ pub use host_click::{HostClickOutcome, HostClickTarget, HostRightClick, HostRigh
 /// A host's use of a gameobject the client would grey out -- see [`host_use`].
 mod host_use;
 pub use host_use::{HostUseObject, HostUsedObject};
+/// A host's turn to the current target, and its answer -- see [`host_face`].
+mod host_face;
+pub use host_face::{HostFaceTarget, HostFacedTarget};
 // `pub(crate)` for the same reason as `cursor_mode`: the faction catalog is one of
 // [`cursor_mode::go_highlightable`]'s three inputs, so the inspector needs it to run the real gate.
 pub(crate) mod ring;
@@ -451,12 +454,24 @@ impl Plugin for TargetPlugin {
             .add_message::<HostObjectClicked>()
             .add_message::<HostRightClicked>()
             .add_message::<HostUsedObject>()
+            .add_message::<HostFacedTarget>()
             .add_message::<TargetByNameRequest>()
             .add_message::<AssistRequest>()
             .add_message::<click::DeselectGuid>()
             // A host's gameobject use: no pick, no classifier -- just the packet. Its own call,
             // as the big tuple below is at Bevy's 20-tuple limit.
             .add_systems(Update, host_use::use_object)
+            // A host's turn to the target: after the drain (this frame's selection is applied)
+            // and before the interface's input tick -- so before the controller too: the frame
+            // that writes the facing is the frame that streams it, and the drains after the tick
+            // (a cast, a use) see the turned body.
+            .add_systems(
+                Update,
+                host_face::face_target
+                    .run_if(resource_exists::<HostFaceTarget>)
+                    .after(WorldStage::Net)
+                    .before(crate::ui_script::UiInput),
+            )
             .add_systems(
                 Startup,
                 (
