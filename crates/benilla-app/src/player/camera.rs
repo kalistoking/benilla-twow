@@ -900,6 +900,45 @@ impl CameraControl {
         self.host_ceiling = Some(d);
     }
 
+    /// **How far from the pivot the camera would really stand** for a host's framing park of
+    /// `distance` yards at `yaw`/`pitch`, once the boom's collision sweep has had its say -- the
+    /// cast [`seat_camera`] makes every frame, made ahead of the park, so a host can choose a
+    /// pitch whose arm is open (`target::host_face`'s framing search) and report what it got.
+    ///
+    /// The same geometry as [`seat_camera`]: the arm is cast from the player's **head** (the
+    /// capsule's top hemisphere centre, `feet + CAPSULE_HEIGHT - CAPSULE_RADIUS`) toward the seat
+    /// `pivot - fwd * distance`, `fwd` built from the **arm** pitch (the park's pitch plus the
+    /// ground tilt's, clamped), with `water` = `cameraWaterCollision`; the camera then rides the
+    /// head-to-seat line to the hit's fraction. The result is that point's distance from the pivot
+    /// (the head sits below the pivot, so it is not the hit distance itself), `distance` exactly
+    /// when the arm is clear. Not modelled: the water corridor's lift of the sweep origin (it only
+    /// raises the origin in the surface band, where a framing park is not asked for) and the
+    /// pivot's glide (`pivot_height` is the host's own reading of it, the framing's pivot).
+    pub(crate) fn realized_distance(
+        &self,
+        collide: &benilla_world::collision::WorldCollision<'_, '_>,
+        water: bool,
+        feet: Vec3,
+        pivot_height: f32,
+        yaw: f32,
+        pitch: f32,
+        distance: f32,
+    ) -> f32 {
+        let arm_pitch = (pitch + self.terrain_tilt.pitch()).clamp(-CAM_PITCH_LIMIT, CAM_PITCH_LIMIT);
+        let fwd = Quat::from_euler(EulerRot::YXZ, yaw, arm_pitch, 0.0) * Vec3::NEG_Z;
+        let pivot = feet + Vec3::Y * pivot_height;
+        let head = feet + Vec3::Y * (super::CAPSULE_HEIGHT - super::CAPSULE_RADIUS);
+        let boom = pivot - fwd * distance - head;
+        let boom_len = boom.length().max(1.0e-3);
+        match collide.cast_camera(head, boom, water) {
+            None => distance,
+            Some(open) => {
+                let seated = head + boom * (open / boom_len).clamp(0.0, 1.0);
+                seated.distance(pivot).min(distance)
+            }
+        }
+    }
+
     /// The orbit distance the rig is parked at and gliding to -- for a host's tests.
     #[cfg(test)]
     pub(crate) fn parked(&self) -> (f32, f32) {

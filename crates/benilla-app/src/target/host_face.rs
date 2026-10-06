@@ -22,7 +22,10 @@
 //! it -- and never touches the distance or the pitch; the zoom's per-frame re-clamp to the slider's
 //! ceiling (15 yd at rest), which would have glided a giant's 30 yd back to 15 within two seconds,
 //! respects the framed park ([`CameraControl::park_framed`]). What still can pull it in is the
-//! boom's collision sweep: a wall or a slope behind the character shortens the arm, as it must.
+//! boom's collision sweep: a wall or a slope behind the character shortens the arm, as it must --
+//! and the framing knows it: the arm is cast ahead of the park, for every candidate pitch
+//! ([`CameraControl::realized_distance`]), so the pitch chosen is one whose arm is open to the
+//! distance it needs, and what is told is the distance the camera will really stand at.
 //!
 //! Unlike a click or a use, the request never waits: there is a selection now or there is not, so
 //! it is consumed on the first in-world frame and answered with [`HostFacedTarget`] either way.
@@ -34,6 +37,7 @@ use super::Selection;
 use crate::entities::StandBoxHeight;
 use crate::net::{NetEntity, ObjectStore, SelfPlayer};
 use crate::player::camera::FlyCam;
+use crate::player::camera_dynamics::CameraOptions;
 use crate::player::{head_height, CameraControl, CameraPivot, Player};
 
 /// The camera's pitch after the turn for a target of ordinary size (radians, `+` = up): a little
@@ -74,6 +78,15 @@ const FRAME_DISTANCE_CAP: f32 = 50.0;
 /// pair of feet exactly on the edge would be under the interface.
 const FRAME_MARGIN: f32 = 0.08;
 
+/// How much shorter than asked the realized arm may be before the framing counts as cut (yards):
+/// the sweep's own margin (the probe radius sits off every surface) is a few inches, not a frame.
+const CLIP_TOLERANCE: f32 = 0.05;
+
+/// Two framings' preference ratios (`realized / asked`) closer than this are the same -- the
+/// search keeps the first (the lowest pitch among the least-distance ones) unless another pitch's
+/// arm is open to clearly more of what it needs.
+const COVERAGE_GAIN: f32 = 0.02;
+
 /// A combat reach read as a height: the client's own two defaults side by side -- its empty-world
 /// collision height ([`crate::player::DEFAULT_COLLISION_HEIGHT`], a human male's 2.03 yd) over the
 /// descriptor's default reach (1.5 yd, `unit_combat_reach`'s fallback and every player's) -- so a
@@ -91,8 +104,19 @@ pub struct HostFaceTarget;
 pub enum HostFacedTarget {
     /// The character turned to the selected unit: `degrees` is the turn made (counter-clockwise
     /// seen from above is positive, `0.0` when it already faced it), `distance` the yards on the
-    /// ground to the target. The camera was parked `camera_distance` yards behind the character at
-    /// `camera_pitch` radians (`+` = up), framing a target of `target_size` ([`framing`]).
+    /// ground to the target. The camera was parked at `camera_pitch` radians (`+` = up), framing a
+    /// target of `target_size` ([`framing`]).
+    ///
+    /// `camera_distance` is the distance the camera **really stands at** from the pivot, after the
+    /// boom's collision sweep ([`CameraControl::realized_distance`]) -- the asked distance when the
+    /// arm is open, less when the world cuts it; `clipped` says it was cut (the realized distance
+    /// is more than [`CLIP_TOLERANCE`] short of the asked one), in which case the framing is not
+    /// the whole target's. Before the arm check `camera_distance` was the asked distance: the
+    /// zoom-proof run's Anubisath Guardian logged 50.0 yd while the arm had ~34.
+    ///
+    /// `self_fade` is the self-avatar's render alpha when the reply was made
+    /// ([`CameraControl::self_fade`], `1.0` opaque): the previous frame's, the park itself not yet
+    /// seated -- a body drawn translucent in a shot has its answer here.
     Turned {
         guid: u64,
         degrees: f32,
@@ -100,6 +124,8 @@ pub enum HostFacedTarget {
         camera_distance: f32,
         camera_pitch: f32,
         target_size: TargetSize,
+        clipped: bool,
+        self_fade: f32,
     },
     /// Nothing is selected (or the selection is not streamed): no turn, the camera untouched.
     NoTarget,
@@ -160,6 +186,21 @@ struct Scene {
     pivot: f32,
 }
 
+/// What [`framing`] decided.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Framing {
+    /// The distance asked of the camera (yards): what the pitch needs, [`FRAME_DISTANCE`] to
+    /// [`FRAME_DISTANCE_CAP`]. What the rig is parked at.
+    asked: f32,
+    /// What the pitch needs **before** the cap: the ranking's number -- under the cap every pitch
+    /// of a giant asks the same 50 yd, and the one that needs least is still the one to take.
+    needed: f32,
+    /// The pitch (radians, `+` = up).
+    pitch: f32,
+    /// The distance the arm really gives at that pitch (yards): `asked` when it is open.
+    realized: f32,
+}
+
 /// **The framing**: the camera's `(distance, pitch)` behind the character so that the whole
 /// target, feet to head, and the character himself stand inside the vertical field of view
 /// ([`CAM_FOVY`]), each edge [`FRAME_MARGIN`] in.
@@ -174,16 +215,34 @@ struct Scene {
 /// - the target's feet, bottom edge: `d >= ((pivot - rise) cos(p - h) + ahead sin(p - h)) / sin h`
 /// - the character's own feet, bottom edge: the same with `rise = 0`, `ahead = 0`
 ///
-/// The distance a pitch needs is the largest of the three and [`FRAME_DISTANCE`]; the pitch is the
-/// one from [`FRAME_PITCH`] up to [`FRAME_PITCH_LEVEL`] that needs the least distance, the lowest
-/// winning a tie -- so a target that fits from 9 yd keeps today's pitch, and a tall one tilts up
-/// only as far as tilting shortens the pull-back. The distance is then capped at
-/// [`FRAME_DISTANCE_CAP`]. No scene (no size known) is the ordinary framing.
-fn framing(scene: Option<Scene>) -> (f32, f32) {
+/// The distance a pitch needs is the largest of the three and [`FRAME_DISTANCE`], capped at
+/// [`FRAME_DISTANCE_CAP`] -- the distance it **asks**. The pitch is one from [`FRAME_PITCH`] up to
+/// [`FRAME_PITCH_LEVEL`], and which one is decided by the world as well as the geometry:
+///
+/// 1. `arm(p, d)` says how far from the pivot the camera would stand for an ask of `d` at pitch
+///    `p` once the boom's collision sweep has cut it ([`CameraControl::realized_distance`]; the
+///    unit tests pass closures, the system casts the real world). A pitch **fits** when its arm
+///    gives what it asks (within [`CLIP_TOLERANCE`]).
+/// 2. Of the pitches that fit, the one that needs the least distance, the lowest winning a tie -- so
+///    a target that fits from 9 yd in the open keeps today's pitch, and a tall one tilts up only
+///    as far as tilting shortens the pull-back.
+/// 3. If none fits, the one whose arm gives the largest share of what it needs (`realized /
+///    needed`; the first, lowest pitch, unless the best is better by more than
+///    [`COVERAGE_GAIN`]): a pitch
+///    tilted differently lifts the camera over a dune or a wall's foot that another arm runs into.
+///
+/// No scene (no size known) is the ordinary framing, at the ordinary pitch; its arm is still
+/// measured, so the distance told is the truth.
+fn framing(scene: Option<Scene>, arm: impl Fn(f32, f32) -> f32) -> Framing {
     let Some(s) = scene.filter(|s| {
         [s.height, s.ahead, s.rise, s.pivot].iter().all(|v| v.is_finite()) && s.height > 0.0
     }) else {
-        return (FRAME_DISTANCE, FRAME_PITCH);
+        return Framing {
+            asked: FRAME_DISTANCE,
+            needed: FRAME_DISTANCE,
+            pitch: FRAME_PITCH,
+            realized: arm(FRAME_PITCH, FRAME_DISTANCE),
+        };
     };
     let half = CAM_FOVY * 0.5 - FRAME_MARGIN;
     let sin_half = half.sin();
@@ -195,17 +254,39 @@ fn framing(scene: Option<Scene>) -> (f32, f32) {
         let own_feet = s.pivot * down.cos() / sin_half;
         FRAME_DISTANCE.max(head).max(feet).max(own_feet)
     };
+    let candidate = |p: f32| {
+        let needed = need(p);
+        let asked = needed.min(FRAME_DISTANCE_CAP);
+        Framing {
+            asked,
+            needed,
+            pitch: p,
+            realized: arm(p, asked),
+        }
+    };
+    let fits = |f: &Framing| f.realized >= f.asked - CLIP_TOLERANCE;
+    let share = |f: &Framing| f.realized / f.needed;
     let steps = ((FRAME_PITCH_LEVEL - FRAME_PITCH) / FRAME_PITCH_STEP).round() as i32;
-    let mut best = (need(FRAME_PITCH), FRAME_PITCH);
+    let first = candidate(FRAME_PITCH);
+    // The least-distance pitch among those whose arm is open, and the best-covered pitch overall.
+    let mut open = fits(&first).then_some(first);
+    let mut covered = first;
     for i in 1..=steps {
         // As a fraction of the span, so the last candidate is level exactly, not level + 1 ulp.
         let p = FRAME_PITCH + (FRAME_PITCH_LEVEL - FRAME_PITCH) * (i as f32 / steps as f32);
-        let d = need(p);
-        if d < best.0 - 1e-4 {
-            best = (d, p);
+        let c = candidate(p);
+        if fits(&c) && open.map_or(true, |o| c.needed < o.needed - 1e-4) {
+            open = Some(c);
+        }
+        if share(&c) > share(&covered) {
+            covered = c;
         }
     }
-    (best.0.min(FRAME_DISTANCE_CAP), best.1)
+    // The best-covered pitch only displaces the first when it is clearly better.
+    if share(&covered) <= share(&first) + COVERAGE_GAIN {
+        covered = first;
+    }
+    open.unwrap_or(covered)
 }
 
 /// Wrap an angle into `(-π, π]`.
@@ -236,6 +317,9 @@ pub(super) fn face_target(
     mut rig: ResMut<CameraControl>,
     mut cam: Query<&mut FlyCam, With<benilla_world::view::WorldCamera>>,
     self_player: Query<(Option<&CameraPivot>, Option<&NetEntity>), With<SelfPlayer>>,
+    // The camera's own world: the boom is cast for every candidate pitch ([`framing`]).
+    collide: benilla_world::collision::WorldCollision,
+    options: Res<CameraOptions>,
     mut faced: MessageWriter<HostFacedTarget>,
 ) {
     if request.is_none() {
@@ -273,21 +357,43 @@ pub(super) fn face_target(
         scale,
         store.map(|s| s.0.unit_combat_reach()),
     );
+    // One pivot for both: the scene's framing and the arm's cast agree on where the camera looks.
+    let pivot = head_height(my_pivot, me.map_or(1.0, |n| n.scale));
     let scene = target_size.height().map(|height| Scene {
         height,
         ahead: distance,
         rise: at.y - player.pos.y,
-        pivot: head_height(my_pivot, me.map_or(1.0, |n| n.scale)),
+        pivot,
     });
-    let (camera_distance, camera_pitch) = framing(scene);
+    let framed = framing(scene, |pitch, asked| {
+        rig.realized_distance(
+            &collide,
+            options.water_collision,
+            player.pos,
+            pivot,
+            facing,
+            pitch,
+            asked,
+        )
+    });
+    let Framing {
+        asked,
+        pitch: camera_pitch,
+        realized: camera_distance,
+        ..
+    } = framed;
+    let clipped = camera_distance < asked - CLIP_TOLERANCE;
+    let self_fade = rig.self_fade();
     if let Ok(mut cam) = cam.single_mut() {
         cam.park(facing, camera_pitch);
     }
-    rig.park_framed(camera_distance);
+    // The rig is parked at what was asked: the collision sweep cuts the arm every frame whatever
+    // the park says, and a ceiling lower than the ask would only hide that from the next reader.
+    rig.park_framed(asked);
     debug!(
-        "host face: {guid:#x} -> turned {:.1} deg ({distance:.1} yd), camera {camera_distance:.1} yd \
-         pitch {camera_pitch:.3} ({target_size:?})",
-        turn.to_degrees()
+        "host face: {guid:#x} -> turned {:.1} deg ({distance:.1} yd), camera {camera_distance:.1} yd          (asked {asked:.1}{}) pitch {camera_pitch:.3} ({target_size:?}) self fade {self_fade:.2}",
+        turn.to_degrees(),
+        if clipped { ", arm clipped" } else { "" },
     );
     faced.write(HostFacedTarget::Turned {
         guid,
@@ -296,6 +402,8 @@ pub(super) fn face_target(
         camera_distance,
         camera_pitch,
         target_size,
+        clipped,
+        self_fade,
     });
 }
 
@@ -309,56 +417,86 @@ mod tests {
     const GUID: u64 = 0xF130_0000_9500_0007;
 
     struct Rig {
-        world: World,
+        app: App,
         camera: Entity,
+        /// Has the physics schedule run once (the spatial-query trees built)? It has to run
+        /// after the fixture's colliders are spawned and not before: avian's collider tree
+        /// update fails on a world whose first frame saw none and whose second saw one.
+        stepped: bool,
     }
 
     impl Rig {
         /// One in the world at the origin, facing yaw 0 (Bevy -Z), the camera off to the side.
         fn new() -> Self {
-            let mut world = World::new();
-            world.init_resource::<Selection>();
-            world.init_resource::<Player>();
-            world.init_resource::<CameraControl>();
-            world.init_resource::<Messages<HostFacedTarget>>();
-            world.spawn(SelfPlayer);
-            let camera = world
+            let mut app = App::new();
+            // `WorldCollision` (the arm's cast) takes the mover's trace exclusions, which the world
+            // plugins initialise and a headless harness does not; avian's backend reads
+            // `Assets<Mesh>` and `SceneSpawner` even in a meshless world (the mover's own tests).
+            app.init_resource::<benilla_world::collision::MoverTraceExclusions>();
+            app.add_plugins((
+                MinimalPlugins,
+                bevy::transform::TransformPlugin,
+                bevy::asset::AssetPlugin::default(),
+                bevy::scene::ScenePlugin,
+                avian3d::prelude::PhysicsPlugins::new(bevy::app::PostUpdate),
+            ));
+            app.init_asset::<Mesh>();
+            app.init_resource::<Selection>();
+            app.init_resource::<Player>();
+            app.init_resource::<CameraControl>();
+            app.init_resource::<CameraOptions>();
+            app.init_resource::<Messages<HostFacedTarget>>();
+            app.world_mut().spawn(SelfPlayer);
+            let camera = app
+                .world_mut()
                 .spawn((benilla_world::view::WorldCamera, FlyCam::at(2.0, -0.45)))
                 .id();
-            Rig { world, camera }
+            Rig {
+                app,
+                camera,
+                stepped: false,
+            }
+        }
+
+        fn world(&mut self) -> &mut World {
+            self.app.world_mut()
         }
 
         fn select(&mut self, at: Vec3) -> Entity {
-            let e = self.world.spawn(Transform::from_translation(at)).id();
-            let mut selection = self.world.resource_mut::<Selection>();
+            let e = self.world().spawn(Transform::from_translation(at)).id();
+            let mut selection = self.world().resource_mut::<Selection>();
             selection.target = Some(e);
             selection.guid = Some(GUID);
             e
         }
 
         fn frame(&mut self) {
-            self.world.run_system_once(face_target).unwrap();
+            if !self.stepped {
+                self.app.update(); // builds the spatial-query trees over what is spawned
+                self.stepped = true;
+            }
+            self.world().run_system_once(face_target).unwrap();
         }
 
         fn told(&mut self) -> Vec<HostFacedTarget> {
-            let mut messages = self.world.resource_mut::<Messages<HostFacedTarget>>();
+            let mut messages = self.world().resource_mut::<Messages<HostFacedTarget>>();
             messages.drain().collect()
         }
 
         fn facing(&self) -> f32 {
-            self.world.resource::<Player>().facing()
+            self.app.world().resource::<Player>().facing()
         }
 
         fn camera(&self) -> (f32, f32) {
-            self.world.get::<FlyCam>(self.camera).unwrap().aim()
+            self.app.world().get::<FlyCam>(self.camera).unwrap().aim()
         }
 
         fn parked(&self) -> (f32, f32) {
-            self.world.resource::<CameraControl>().parked()
+            self.app.world().resource::<CameraControl>().parked()
         }
 
         fn pending(&self) -> bool {
-            self.world.contains_resource::<HostFaceTarget>()
+            self.app.world().contains_resource::<HostFaceTarget>()
         }
     }
 
@@ -373,7 +511,7 @@ mod tests {
     fn the_character_turns_to_the_target_and_the_camera_goes_behind_it() {
         let mut rig = Rig::new();
         rig.select(Vec3::new(3.0, 0.5, 0.0));
-        rig.world.insert_resource(HostFaceTarget);
+        rig.world().insert_resource(HostFaceTarget);
         rig.frame();
         assert!(close(rig.facing(), -FRAC_PI_2), "facing {}", rig.facing());
         let (yaw, pitch) = rig.camera();
@@ -383,8 +521,9 @@ mod tests {
         assert!(
             matches!(told.as_slice(), [HostFacedTarget::Turned {
                 guid: GUID, degrees, distance, camera_distance, camera_pitch,
-                target_size: TargetSize::Unknown,
-            }] if close(*degrees, -90.0) && close(*distance, 3.0)
+                target_size: TargetSize::Unknown, clipped: false, self_fade,
+            }] if close(*degrees, -90.0)
+                && *self_fade == rig.app.world().resource::<CameraControl>().self_fade() && close(*distance, 3.0)
                 && *camera_distance == FRAME_DISTANCE && *camera_pitch == FRAME_PITCH),
             "{told:?}"
         );
@@ -398,11 +537,11 @@ mod tests {
     fn a_giant_is_framed_by_its_drawn_model() {
         let mut rig = Rig::new();
         let giant = rig.select(Vec3::new(0.0, 0.0, -7.0));
-        rig.world.entity_mut(giant).insert((
+        rig.world().entity_mut(giant).insert((
             StandBoxHeight(4.7),
             Transform::from_translation(Vec3::new(0.0, 0.0, -7.0)).with_scale(Vec3::splat(3.0)),
         ));
-        rig.world.insert_resource(HostFaceTarget);
+        rig.world().insert_resource(HostFaceTarget);
         rig.frame();
         let told = rig.told();
         let [HostFacedTarget::Turned {
@@ -428,7 +567,7 @@ mod tests {
         let mut rig = Rig::new();
         let at = Vec3::new(-4.0, 0.0, 7.0);
         rig.select(at);
-        rig.world.insert_resource(HostFaceTarget);
+        rig.world().insert_resource(HostFaceTarget);
         rig.frame();
         let forward = Quat::from_rotation_y(rig.facing()) * Vec3::NEG_Z;
         let want = Vec3::new(at.x, 0.0, at.z).normalize();
@@ -439,10 +578,10 @@ mod tests {
     #[test]
     fn the_turn_goes_the_short_way_round() {
         let mut rig = Rig::new();
-        rig.world.resource_mut::<Player>().turn_aim(3.0);
+        rig.world().resource_mut::<Player>().turn_aim(3.0);
         let bearing = -3.0f32;
         rig.select(Vec3::new(-bearing.sin(), 0.0, -bearing.cos()) * 5.0);
-        rig.world.insert_resource(HostFaceTarget);
+        rig.world().insert_resource(HostFaceTarget);
         rig.frame();
         let told = rig.told();
         let want = (std::f32::consts::TAU - 6.0).to_degrees();
@@ -456,7 +595,7 @@ mod tests {
     #[test]
     fn no_target_is_told_and_nothing_moves() {
         let mut rig = Rig::new();
-        rig.world.insert_resource(HostFaceTarget);
+        rig.world().insert_resource(HostFaceTarget);
         rig.frame();
         assert_eq!(rig.told(), vec![HostFacedTarget::NoTarget]);
         assert!(close(rig.facing(), 0.0));
@@ -470,14 +609,11 @@ mod tests {
     #[test]
     fn out_of_the_world_the_request_waits() {
         let mut rig = Rig::new();
-        let me = rig
-            .world
-            .query_filtered::<Entity, With<SelfPlayer>>()
-            .single(&rig.world)
-            .unwrap();
-        rig.world.despawn(me);
+        let mut q = rig.world().query_filtered::<Entity, With<SelfPlayer>>();
+        let me = q.single(rig.app.world()).unwrap();
+        rig.world().despawn(me);
         rig.select(Vec3::new(3.0, 0.0, 0.0));
-        rig.world.insert_resource(HostFaceTarget);
+        rig.world().insert_resource(HostFaceTarget);
         rig.frame();
         assert!(rig.pending());
         assert!(rig.told().is_empty());
@@ -487,6 +623,14 @@ mod tests {
 
     /// A human's neck, the camera's fallback pivot.
     const PIVOT: f32 = 1.8;
+
+    /// The framing in the open: an arm that gives whatever it is asked, so the pure geometry is
+    /// what is under test (every test below that does not say otherwise).
+    fn framing(scene: Option<Scene>) -> (f32, f32) {
+        let f = super::framing(scene, |_, asked| asked);
+        assert_eq!(f.realized, f.asked, "an open arm gives what is asked");
+        (f.asked, f.pitch)
+    }
 
     fn scene(height: f32, ahead: f32) -> Option<Scene> {
         Some(Scene {
@@ -617,5 +761,94 @@ mod tests {
             TargetSize::CombatReach { height } if (height - 4.0 * crate::player::DEFAULT_COLLISION_HEIGHT).abs() < 1e-4));
         assert_eq!(target_size(None, 1.0, None), TargetSize::Unknown);
         assert_eq!(target_size(Some(0.0), 1.0, Some(0.0)), TargetSize::Unknown);
+    }
+
+    // ---- the arm's collision ----
+
+    /// An arm the world cuts to `cap` yards at every pitch.
+    fn capped(cap: f32) -> impl Fn(f32, f32) -> f32 {
+        move |_, asked| asked.min(cap)
+    }
+
+    /// An open arm changes nothing: the result is the pure geometry's, pitch and distance, for
+    /// every size of target -- the cast is only ever a filter on the pitches the search had.
+    #[test]
+    fn an_open_arm_is_the_pure_framing() {
+        for (height, ahead) in [(2.0, 3.0), (14.0, 8.0), (19.5, 3.8)] {
+            let f = super::framing(scene(height, ahead), |_, asked| asked);
+            assert_eq!((f.asked, f.pitch), framing(scene(height, ahead)), "{height} at {ahead}");
+            assert_eq!(f.realized, f.asked);
+        }
+    }
+
+    /// The zoom-proof run's Guardian (19.5 yd, One 3.0 yd from it) with an arm of 34 yd at every
+    /// pitch: the 50 yd the framing asked for is never claimed -- what is told is what the arm
+    /// gives -- and the pitch is still the one that needs least (the open framing's), since no
+    /// pitch is better covered than another.
+    #[test]
+    fn a_cut_arm_is_told_as_it_is() {
+        let f = super::framing(scene(19.5, 3.0), capped(34.0));
+        assert!(f.realized <= 34.0 + 1e-4, "{f:?}");
+        assert!(f.realized < f.asked - CLIP_TOLERANCE, "cut: {f:?}");
+        assert_eq!(f.pitch, framing(scene(19.5, 3.0)).1, "{f:?}");
+        // The open framing asked for the cap; the report must not be that.
+        assert_eq!(framing(scene(19.5, 3.0)).0, FRAME_DISTANCE_CAP);
+        assert!(f.realized != FRAME_DISTANCE_CAP);
+    }
+
+    /// An arm that is short only at level (a dune behind One, run into by a level boom) and long
+    /// once the camera is pitched: the pitch chosen is one that fits -- the open framing's level
+    /// pitch is given up for it -- and its arm gives all it asks.
+    #[test]
+    fn a_pitch_that_clears_the_world_is_taken() {
+        let s = scene(14.0, 8.0).unwrap();
+        let (d_open, p_open) = framing(Some(s));
+        assert!(p_open > FRAME_PITCH, "the open framing tilts up: {p_open}");
+        // The level-ish arm (the open framing's pitch and everything above it) is cut hard; below
+        // it the camera clears.
+        let arm = |p: f32, asked: f32| if p >= p_open - 1e-4 { asked.min(5.0) } else { asked };
+        let f = super::framing(Some(s), arm);
+        assert!(f.pitch < p_open - 1e-3, "pitched down from {p_open}: {f:?}");
+        assert!(f.realized >= f.asked - CLIP_TOLERANCE, "it fits: {f:?}");
+        assert!(f.asked >= d_open - 1e-3, "and costs more distance than the open pitch: {f:?}");
+        assert!(fits(f.asked, f.pitch, s), "and frames the whole target: {f:?}");
+    }
+
+    /// With no pitch fitting, the best-covered one: a level arm 4 yd long, a downward arm 12
+    /// yd long -- the downward one is taken though it needs the most distance.
+    #[test]
+    fn with_no_pitch_open_the_best_covered_is_taken() {
+        let s = scene(14.0, 8.0).unwrap();
+        let arm = |p: f32, asked: f32| asked.min(if p <= FRAME_PITCH + 1e-4 { 12.0 } else { 4.0 });
+        let f = super::framing(Some(s), arm);
+        assert_eq!(f.pitch, FRAME_PITCH, "{f:?}");
+        assert!((f.realized - 12.0).abs() < 1e-4, "{f:?}");
+        assert!(f.realized < f.asked - CLIP_TOLERANCE, "{f:?}");
+    }
+
+    /// A wall behind One, in the real world: the cast runs, the request is answered with the
+    /// distance the camera will really stand at and `clipped` set -- not the 9 yd it asked.
+    #[test]
+    fn a_wall_behind_the_character_is_told() {
+        use avian3d::prelude::{Collider, RigidBody};
+        let mut rig = Rig::new();
+        // One at the origin, facing the target due -Z; the camera goes behind, +Z. A slab 3 yd
+        // behind, wide and tall enough to catch every pitch's arm.
+        rig.world().spawn((
+            RigidBody::Static,
+            Collider::cuboid(40.0, 40.0, 1.0),
+            Transform::from_xyz(0.0, 0.0, 3.5),
+        ));
+        rig.select(Vec3::new(0.0, 0.0, -4.0));
+        rig.world().insert_resource(HostFaceTarget);
+        rig.frame();
+        let told = rig.told();
+        let [HostFacedTarget::Turned { camera_distance, clipped, .. }] = told.as_slice() else {
+            panic!("{told:?}");
+        };
+        assert!(*clipped, "{told:?}");
+        assert!(*camera_distance < FRAME_DISTANCE - 1.0, "{told:?}");
+        // The rig is still parked at what was asked.
+        assert_eq!(rig.parked(), (FRAME_DISTANCE, FRAME_DISTANCE));
     }
 }
