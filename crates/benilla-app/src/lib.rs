@@ -308,6 +308,9 @@ pub use net::{HostSoundKind, HostWire};
 pub use login::EndSession;
 pub use net::SessionLive;
 pub use net::SelfGuid;
+/// The idle handler's last-input stamp. A host that drives the client with no hardware input
+/// calls [`LastInput::mark_present`] every frame so the run never sits AFK at five minutes.
+pub use ui_chat::idle::LastInput;
 /// The realmlist an embedder pins, the one host its sessions may dial.
 pub use realmlist::EmbedderRealmlist;
 /// What is selected, by server guid -- the read-back an embedder needs to learn that the person

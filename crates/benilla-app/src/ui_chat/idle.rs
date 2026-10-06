@@ -58,7 +58,7 @@ use super::feed::ChatLog;
 /// and the world alike, and it starts at zero, so a client whose first five minutes are untouched
 /// is idle by the reference's own reckoning. [`stamp_input`] is ungated for the same reason.
 #[derive(Resource, Debug, Clone, Copy, Default)]
-pub(crate) struct LastInput(Duration);
+pub struct LastInput(Duration);
 
 impl LastInput {
     /// Stamp the clock as an **unattended probe** — the one caller outside [`stamp_input`].
@@ -76,6 +76,18 @@ impl LastInput {
     /// own dispatcher, which is a lie told one layer lower down and harder to see).
     pub(crate) fn stamp_present(&mut self, now: Duration) {
         self.0 = now;
+    }
+
+    /// **The embedder's hook: a person is at the keyboard, as of this frame.** The same stamp as
+    /// [`LastInput::stamp_present`], read off the same real clock the handler subtracts from, and
+    /// public because a host that *drives* the client -- trt's test run plays a card's timeline
+    /// through the UI with no hardware input at all -- is the other unattended caller. Without it
+    /// the run is idle by the reference's reckoning, sits the player at five minutes and sets AFK,
+    /// and every cast after that is refused `SPELL_FAILED_NOT_STANDING`. Call it every frame the
+    /// host is driving; the resource is there whenever [`crate::GamePlugins`] is, so a host asks
+    /// for it as an `Option`.
+    pub fn mark_present(&mut self, clock: &Time<Real>) {
+        self.0 = clock.elapsed();
     }
 }
 
@@ -736,6 +748,28 @@ mod tests {
     }
 
     /// Four minutes fifty-nine is not idle. Nothing at all — no line, no packet, no posture.
+    /// **A host that marks the player present every frame never trips the handler**, however long
+    /// the run (B101: trt's test driver played a card past five minutes on a sitting AFK player).
+    #[test]
+    fn a_host_marking_present_each_frame_never_goes_afk() {
+        let (mut app, rx) = world(0, &[]);
+        // Walk the real clock through 40 minutes in ten-second frames, spanning both legs.
+        for _ in 0..240 {
+            app.world_mut()
+                .resource_mut::<Time<Real>>()
+                .advance_by(Duration::from_secs(10));
+            app.world_mut()
+                .run_system_once(|clock: Res<Time<Real>>, mut last: ResMut<LastInput>| {
+                    last.mark_present(&clock);
+                })
+                .unwrap();
+            app.world_mut().run_system_once(idle_handler).unwrap();
+        }
+        assert!(lines(&app).is_empty(), "{:?}", lines(&app));
+        assert!(!app.world().resource::<AfkMirror>().is_afk());
+        assert!(rx.try_iter().next().is_none());
+    }
+
     #[test]
     fn just_under_five_minutes_is_completely_silent() {
         let (mut app, rx) = world(299_999, &[]);
