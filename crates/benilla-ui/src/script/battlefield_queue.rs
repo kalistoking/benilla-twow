@@ -63,6 +63,20 @@ pub struct BattlefieldQueueSlot {
     pub time_waited_ms: u32,
 }
 
+impl BattlefieldQueueSlot {
+    /// An unused slot as the reference's static three-slot array (`0xb6e9d0`) answers before any
+    /// `SMSG_BATTLEFIELD_STATUS`: status `0` (`"none"`), every number `0`, and the name of Map.dbc
+    /// row 0 -- the reference looks map 0 up like any other id. The app's per-frame push replaces
+    /// this with the catalog's own (localized) name; this is only what a VM answers before the
+    /// first push, so `GetBattlefieldStatus(1..3)` is never `nil` whatever order the feeds run in.
+    pub fn idle() -> Self {
+        Self {
+            map_name: Some("Eastern Kingdoms".to_string()),
+            ..Self::default()
+        }
+    }
+}
+
 /// The Map.dbc half of `GetBattlefieldInfo` (§3.4), resolved by the app for the listed map.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct BattlefieldMapInfo {
@@ -275,7 +289,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // `GetBattlefieldStatus(index)` — five values on EVERY leg (§3.2): off 1..3 it is
-    // `(nil, nil, 0, 0, 0)`, never a raise and never zero values.
+    // `(nil, nil, 0, 0, 0)`, never a raise and never zero values. Inside 1..3 a slot always
+    // exists (the model starts with three idle ones), so an in-range index never answers nil.
     g.set(
         "GetBattlefieldStatus",
         lua.create_function(|lua, index: Value| {
@@ -427,6 +442,28 @@ mod tests {
             estimated_wait_ms: 30_000,
             time_waited_ms: 5_000,
         }
+    }
+
+    /// A fresh VM, before any queue push, answers the idle slot for 1..3 -- `"none"`, never `nil`
+    /// -- so the stock `BattlefieldFrame_Update` (first fired by PARTY_LEADER_CHANGED at login)
+    /// concatenates a map name without raising.
+    #[test]
+    fn a_fresh_model_answers_none_for_all_three_slots() {
+        let s = vm();
+        for i in 1..=3 {
+            let got = s
+                .eval::<String>(&format!(
+                    "local st, name, id, lo, hi = GetBattlefieldStatus({i})                      return st .. '|' .. name .. '|' .. id .. '|' .. lo .. '|' .. hi"
+                ))
+                .unwrap();
+            assert_eq!(got, "none|Eastern Kingdoms|0|0|0", "slot {i}");
+        }
+        assert_eq!(
+            s.eval::<bool>("return (GetBattlefieldStatus(4)) == nil")
+                .unwrap(),
+            true,
+            "off the three slots it is still nil"
+        );
     }
 
     /// The reference's 1-based gate: 0 and negatives fall out with the too-large ones.

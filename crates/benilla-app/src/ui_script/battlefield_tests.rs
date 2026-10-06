@@ -77,6 +77,21 @@ fn visible(s: &UiScript, frame: &str) -> bool {
         .unwrap()
 }
 
+/// The login order that raised `BattlefieldFrame.lua:238` (B103): a grouped player's first feed
+/// frame fires PARTY_LEADER_CHANGED -> `BattlefieldFrame_Update` before any queue push, which must
+/// find three idle slots (`"none"`) and not concatenate a nil map name.
+#[test]
+fn party_leader_changed_before_any_queue_push_raises_nothing() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = session();
+    s.fire_event("PARTY_LEADER_CHANGED", vec![]);
+    assert_eq!(s.take_errors(), Vec::<String>::new());
+    assert_eq!(
+        s.eval::<String>("return (GetBattlefieldStatus(1))").unwrap(),
+        "none"
+    );
+}
+
 /// The minimap's queue icon: hidden with no queue, shown by a queued slot with the reference's
 /// three-line tooltip, the confirm dialog on a ready slot, hidden again when the queue clears.
 #[test]
