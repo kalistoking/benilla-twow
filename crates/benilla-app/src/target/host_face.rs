@@ -55,12 +55,19 @@ const FRAME_PITCH_STEP: f32 = 0.005;
 /// only ever pulls back from it.
 const FRAME_DISTANCE: f32 = 9.0;
 
-/// The furthest [`framing`] pulls back (yards). At 40 yd One (~2 yd) still stands ~1/15 of the
-/// frame's height (some 70 px of a 1080-line shot), so he is still in the picture beside the
-/// target; and 40 yd already frames a target of ~20 yd at melee range, past the biggest bosses of
-/// the game. Further out a shot is mostly sky, and inside a dungeon the boom's collision sweep
-/// would pull it in anyway. Under the reference's own hard cap of 50 on `cameraDistanceMax`.
-const FRAME_DISTANCE_CAP: f32 = 40.0;
+/// The furthest [`framing`] pulls back (yards): the reference's own hard cap of 50 on
+/// `cameraDistanceMax`, so the host's camera never stands where a player's could not.
+///
+/// It is sized by the biggest bodies the game draws, not by taste. An Anubisath Guardian (Ruins of
+/// Ahn'Qiraj, display 15347, `Creature\Anubisath\Anubisath.m2` at scale 2.5) is **19.5 yd** to the
+/// top of its Stand box (7.80 model-local; every other sequence box 7.6-8.6, the bind-pose mesh
+/// 8.07 -- the box is the body, not inflated), and at melee range, 3.8 yd ahead, it needs 50.9 yd
+/// with the full [`FRAME_MARGIN`]. At 50 it is framed level, feet to head, its head ~4.3 deg under
+/// the frame's top edge (~150 px of a 1440-line shot) -- the margin spent down from 4.6 deg, not
+/// the head. The proof run that had this at 40 cut the Guardian's head and ears off (the box top
+/// then sat 0.5 deg inside the edge, the ears outside it). At 50 One (~2 yd) still stands ~1/20 of
+/// the frame's height beside the target.
+const FRAME_DISTANCE_CAP: f32 = 50.0;
 
 /// The frame's margin, top and bottom (radians, ~4.6 deg, about a tenth of the 45 deg frame
 /// height): the action bars cover the bottom of a shot and the unit frames its top, so a head or a
@@ -561,16 +568,31 @@ mod tests {
         }
     }
 
-    /// Past what any boss needs, the cap holds -- the distance never goes further.
+    /// The Anubisath Guardian of the proof run: 19.5 yd tall (its Stand box x 2.5), at melee range.
+    /// The cap binds, the pitch is level, and the Guardian fits feet to head with most of the
+    /// margin left -- the proof run's 40 yd cap cut its head off.
     #[test]
-    fn the_cap_holds() {
-        for height in [25.0, 60.0, 1000.0] {
-            let (d, p) = framing(scene(height, 5.0));
-            assert_eq!(d, FRAME_DISTANCE_CAP, "{height} yd");
-            assert!(p <= FRAME_PITCH_LEVEL);
+    fn a_boss_of_twenty_yards_fits_at_the_cap() {
+        for ahead in [0.0, 3.8, 5.7] {
+            let s = scene(19.5, ahead).unwrap();
+            let (d, p) = framing(Some(s));
+            assert!(d <= FRAME_DISTANCE_CAP && d > 45.0, "{ahead} yd: {d}");
+            assert_eq!(p, FRAME_PITCH_LEVEL, "{ahead} yd");
+            // Inside the frame with at least 0.05 rad (2.9 deg) to spare at the edge, feet to head.
+            let edge = CAM_FOVY * 0.5 - 0.05;
+            for (y, x) in [(s.height, ahead), (0.0, ahead), (0.0, 0.0)] {
+                let a = off_axis(d, p, s, y, x);
+                assert!(a.abs() <= edge, "{ahead} yd: point ({y}, {x}) at {a} rad");
+            }
+            // The tallest the Guardian's mesh ever reaches (8.6 model-local, x 2.5) still fits.
+            assert!(off_axis(d, p, s, 8.6 * 2.5, ahead) < CAM_FOVY * 0.5, "{ahead} yd");
         }
+        assert_eq!(framing(scene(19.5, 3.8)).0, FRAME_DISTANCE_CAP);
+        // At the old 40 yd its head was out of the margin.
+        assert!(!fits(40.0, 0.0, scene(19.5, 3.8).unwrap()));
     }
 
+    /// Past what any boss needs, the cap holds -- the distance never goes further.
     /// No size known (or a size that is no size): today's camera.
     #[test]
     fn no_size_is_the_ordinary_framing() {
