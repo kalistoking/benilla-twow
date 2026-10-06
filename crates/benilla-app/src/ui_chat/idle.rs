@@ -748,6 +748,15 @@ mod tests {
     }
 
     /// Four minutes fifty-nine is not idle. Nothing at all — no line, no packet, no posture.
+    #[test]
+    fn just_under_five_minutes_is_completely_silent() {
+        let (mut app, rx) = world(299_999, &[]);
+        app.world_mut().run_system_once(idle_handler).unwrap();
+        assert!(lines(&app).is_empty());
+        assert!(!app.world().resource::<AfkMirror>().is_afk());
+        assert!(rx.try_iter().next().is_none());
+    }
+
     /// **A host that marks the player present every frame never trips the handler**, however long
     /// the run (B101: trt's test driver played a card past five minutes on a sitting AFK player).
     #[test]
@@ -766,15 +775,6 @@ mod tests {
             app.world_mut().run_system_once(idle_handler).unwrap();
         }
         assert!(lines(&app).is_empty(), "{:?}", lines(&app));
-        assert!(!app.world().resource::<AfkMirror>().is_afk());
-        assert!(rx.try_iter().next().is_none());
-    }
-
-    #[test]
-    fn just_under_five_minutes_is_completely_silent() {
-        let (mut app, rx) = world(299_999, &[]);
-        app.world_mut().run_system_once(idle_handler).unwrap();
-        assert!(lines(&app).is_empty());
         assert!(!app.world().resource::<AfkMirror>().is_afk());
         assert!(rx.try_iter().next().is_none());
     }
