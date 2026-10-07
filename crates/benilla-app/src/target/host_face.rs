@@ -122,6 +122,11 @@ pub enum HostFacedTarget {
     /// `self_fade` is the self-avatar's render alpha when the reply was made
     /// ([`CameraControl::self_fade`], `1.0` opaque): the previous frame's, the park itself not yet
     /// seated -- a body drawn translucent in a shot has its answer here.
+    ///
+    /// `rise_clamped` says One stood farther above or below the target's feet than the framing
+    /// follows (the target's height, at least [`FRAME_RISE_FLOOR`]): the rise was counted only up
+    /// to that band, so the target's feet (One above it) or its head (One below) may be out of
+    /// the frame -- a throw, a cliff, a pit.
     Turned {
         guid: u64,
         degrees: f32,
@@ -131,6 +136,7 @@ pub enum HostFacedTarget {
         target_size: TargetSize,
         clipped: bool,
         self_fade: f32,
+        rise_clamped: bool,
     },
     /// Nothing is selected (or the selection is not streamed): no turn, the camera untouched.
     NoTarget,
@@ -204,6 +210,10 @@ struct Framing {
     pitch: f32,
     /// The distance the arm really gives at that pitch (yards): `asked` when it is open.
     realized: f32,
+    /// One's rise above or below the target's feet was past the band and counted only up to it
+    /// ([`FRAME_RISE_FLOOR`]): the target's feet (One above) or head (One below) may be out of
+    /// the frame.
+    rise_clamped: bool,
 }
 
 /// **The framing**: the camera's `(distance, pitch)` behind the character so that the whole
@@ -250,12 +260,14 @@ fn framing(scene: Option<Scene>, arm: impl Fn(f32, f32) -> f32) -> Framing {
             needed: FRAME_DISTANCE,
             pitch: FRAME_PITCH,
             realized: arm(FRAME_PITCH, FRAME_DISTANCE),
+            rise_clamped: false,
         };
     };
     let half = CAM_FOVY * 0.5 - FRAME_MARGIN;
     let sin_half = half.sin();
     let band = s.height.max(FRAME_RISE_FLOOR);
     let rise = s.rise.clamp(-band, band);
+    let rise_clamped = rise != s.rise;
     let top = rise + s.height;
     let need = |p: f32| {
         let (up, down) = (p + half, p - half);
@@ -272,6 +284,7 @@ fn framing(scene: Option<Scene>, arm: impl Fn(f32, f32) -> f32) -> Framing {
             needed,
             pitch: p,
             realized: arm(p, asked),
+            rise_clamped,
         }
     };
     let fits = |f: &Framing| f.realized >= f.asked - CLIP_TOLERANCE;
@@ -390,6 +403,7 @@ pub(super) fn face_target(
         asked,
         pitch: camera_pitch,
         realized: camera_distance,
+        rise_clamped,
         ..
     } = framed;
     let clipped = camera_distance < asked - CLIP_TOLERANCE;
@@ -401,9 +415,11 @@ pub(super) fn face_target(
     // the park says, and a ceiling lower than the ask would only hide that from the next reader.
     rig.park_framed(asked);
     debug!(
-        "host face: {guid:#x} -> turned {:.1} deg ({distance:.1} yd), camera {camera_distance:.1} yd          (asked {asked:.1}{}) pitch {camera_pitch:.3} ({target_size:?}) self fade {self_fade:.2}",
+        "host face: {guid:#x} -> turned {:.1} deg ({distance:.1} yd), camera {camera_distance:.1} yd \
+         (asked {asked:.1}{}{}) pitch {camera_pitch:.3} ({target_size:?}) self fade {self_fade:.2}",
         turn.to_degrees(),
         if clipped { ", arm clipped" } else { "" },
+        if rise_clamped { ", rise clamped" } else { "" },
     );
     faced.write(HostFacedTarget::Turned {
         guid,
@@ -414,6 +430,7 @@ pub(super) fn face_target(
         target_size,
         clipped,
         self_fade,
+        rise_clamped,
     });
 }
 
@@ -531,7 +548,7 @@ mod tests {
         assert!(
             matches!(told.as_slice(), [HostFacedTarget::Turned {
                 guid: GUID, degrees, distance, camera_distance, camera_pitch,
-                target_size: TargetSize::Unknown, clipped: false, self_fade,
+                target_size: TargetSize::Unknown, clipped: false, self_fade, rise_clamped: false,
             }] if close(*degrees, -90.0)
                 && *self_fade == rig.app.world().resource::<CameraControl>().self_fade() && close(*distance, 3.0)
                 && *camera_distance == FRAME_DISTANCE && *camera_pitch == FRAME_PITCH),
@@ -773,6 +790,25 @@ mod tests {
         let (d, _) = at(3.0, -4.0);
         assert!((d - 11.65).abs() < 0.05, "{d}");
         assert_eq!(at(5.5, -4.0), (FRAME_DISTANCE, FRAME_PITCH));
+    }
+
+    /// The clamp is told: a rise past the band (above or below) says `rise_clamped`, one inside it
+    /// or on its edge does not, and no scene is never clamped.
+    #[test]
+    fn a_rise_past_the_band_is_told_as_clamped() {
+        let clamped = |rise: f32| {
+            super::framing(
+                Some(Scene {
+                    rise,
+                    ..scene(3.7, 3.0).unwrap()
+                }),
+                |_, asked| asked,
+            )
+            .rise_clamped
+        };
+        assert!(clamped(-30.0) && clamped(30.0) && clamped(-4.01));
+        assert!(!clamped(-4.0) && !clamped(0.0) && !clamped(2.5) && !clamped(4.0));
+        assert!(!super::framing(None, |_, asked| asked).rise_clamped);
     }
 
     /// The Anubisath Guardian of the proof run: 19.5 yd tall (its Stand box x 2.5), at melee range.

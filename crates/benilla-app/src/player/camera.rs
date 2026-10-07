@@ -886,8 +886,10 @@ pub(crate) struct CameraControl {
     /// test lab's turn to its target put the camera at, which [`apply_zoom_scroll`]'s per-frame
     /// re-clamp admits as a ceiling of its own. Without it a park beyond [`ZoomLimit::max`] (15 yd
     /// at rest) glides back in at `cameraDistanceMoveSpeed` within the second, and a giant framed
-    /// whole is framed from the knees again. Dropped by the first wheel or zoom-key notch: the
-    /// hand takes the zoom back, and the ordinary ceiling with it. `None` in every ordinary game.
+    /// whole is framed from the knees again. Dropped by the first wheel or zoom-key notch -- the
+    /// hand takes the zoom back, and the ordinary ceiling with it -- and by a teleport or a
+    /// worldport ([`release_host_ceiling_on_port`]): the framing was the old spot's, and a 50 yd
+    /// arm must not follow the character to the next one. `None` in every ordinary game.
     pub(super) host_ceiling: Option<f32>,
 }
 
@@ -1395,6 +1397,26 @@ pub(super) fn apply_zoom_scroll(scroll: f32, dt: f32, rig: &mut CameraControl, m
     // stopping exactly there — the verified vanilla behavior (linear, frame-delta-scaled; not an ease).
     let max_step = CAM_MOVE_SPEED * dt;
     rig.distance += (rig.target_distance - rig.distance).clamp(-max_step, max_step);
+}
+
+/// **A port gives the zoom back to the slider**: a same-map teleport
+/// ([`crate::net::TeleportMessage`] -- `.go`, a `.tele` within the map, a summon) or a worldport
+/// to another map ([`crate::net::WorldportMessage`] -- a cross-map `.tele`, an instance portal, the
+/// boat) drops a host's framing ceiling ([`CameraControl::host_ceiling`]) as a wheel notch does,
+/// and the next [`apply_zoom_scroll`] pulls a park past the slider's ceiling back in at
+/// `cameraDistanceMoveSpeed`. After the drain that writes both messages, before the host's next
+/// framing and the controller's re-clamp.
+pub(crate) fn release_host_ceiling_on_port(
+    mut teleports: MessageReader<crate::net::TeleportMessage>,
+    mut worldports: MessageReader<crate::net::WorldportMessage>,
+    rig: Option<ResMut<CameraControl>>,
+) {
+    // Both read every frame, so a port that lands with no ceiling parked is not kept for later.
+    let ported = teleports.read().count() + worldports.read().count() > 0;
+    if let Some(mut rig) = rig.filter(|r| ported && r.host_ceiling.is_some()) {
+        debug!("host framing: ceiling {:?} released by a port", rig.host_ceiling);
+        rig.host_ceiling = None;
+    }
 }
 
 /// Seat the camera on **whatever the rig is orbiting this frame** — our own body, or a far-sight
@@ -2123,6 +2145,55 @@ mod tests {
         assert_eq!(rig.host_ceiling, None);
         assert_eq!(rig.target_distance, max, "the notch re-clamps to the slider's ceiling");
         assert!(rig.distance < 30.0 && rig.distance > max, "and the glide walks in: {}", rig.distance);
+    }
+
+    /// A teleport or a worldport hands the zoom back to the slider as a notch does: a 50 yd
+    /// framing does not follow the character to the next spot. Frames with no port keep it.
+    #[test]
+    fn a_port_releases_the_framing_ceiling() {
+        use bevy::ecs::system::RunSystemOnce;
+        let teleport = crate::net::TeleportMessage {
+            guid: 1,
+            counter: 0,
+            position: [0.0; 3],
+            orientation: 0.0,
+        };
+        let worldport = crate::net::WorldportMessage {
+            map_id: 1,
+            position: [0.0; 3],
+            orientation: 0.0,
+            needs_ack: false,
+            transport_entry: None,
+        };
+        let max = ZoomLimit::default().max;
+        for port in [Some(true), Some(false), None] {
+            let mut app = App::new();
+            app.init_resource::<CameraControl>()
+                .add_message::<crate::net::TeleportMessage>()
+                .add_message::<crate::net::WorldportMessage>();
+            app.world_mut().resource_mut::<CameraControl>().park_framed(50.0);
+            app.world_mut().run_system_once(release_host_ceiling_on_port).unwrap();
+            assert_eq!(app.world().resource::<CameraControl>().host_ceiling, Some(50.0));
+            match port {
+                Some(true) => {
+                    app.world_mut().write_message(teleport);
+                }
+                Some(false) => {
+                    app.world_mut().write_message(worldport);
+                }
+                None => {}
+            }
+            app.world_mut().run_system_once(release_host_ceiling_on_port).unwrap();
+            let mut rig = app.world_mut().resource_mut::<CameraControl>();
+            apply_zoom_scroll(0.0, 1.0 / 60.0, &mut rig, max);
+            if port.is_some() {
+                assert_eq!(rig.host_ceiling, None, "{port:?}");
+                assert_eq!(rig.target_distance, max, "{port:?}: re-clamped to the slider");
+                assert!(rig.distance < 50.0, "{port:?}: and the glide walks in");
+            } else {
+                assert_eq!(rig.parked(), (50.0, 50.0), "no port: it holds");
+            }
+        }
     }
 
     /// A plain park (the probe camera's, the spyglass's) is no ceiling: past the slider it is

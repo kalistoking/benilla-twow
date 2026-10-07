@@ -464,12 +464,14 @@ impl Plugin for TargetPlugin {
             // A host's turn to the target: after the drain (this frame's selection is applied)
             // and before the interface's input tick -- so before the controller too: the frame
             // that writes the facing is the frame that streams it, and the drains after the tick
-            // (a cast, a use) see the turned body.
+            // (a cast, a use) see the turned body. After a port's release of the framing ceiling,
+            // so a frame that both ports and frames keeps the ceiling this framing parks.
             .add_systems(
                 Update,
                 host_face::face_target
                     .run_if(resource_exists::<HostFaceTarget>)
                     .after(WorldStage::Net)
+                    .after(crate::player::camera::release_host_ceiling_on_port)
                     .before(crate::ui_script::UiInput),
             )
             .add_systems(

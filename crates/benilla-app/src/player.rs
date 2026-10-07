@@ -397,6 +397,16 @@ impl Plugin for PlayerPlugin {
                 .before(control)
                 .in_set(crate::char_select::InWorldGated),
         )
+        // A teleport or a worldport drops a host's framing ceiling (`camera::host_ceiling`).
+        // After the drain that writes both messages, before the controller's zoom re-clamp; the
+        // host's framing (`target::host_face`) orders itself after this, so a frame that both
+        // ports and frames keeps the new framing. Ungated: a port is a port, in world or not.
+        .add_systems(
+            Update,
+            camera::release_host_ceiling_on_port
+                .after(WorldStage::Net)
+                .before(control),
+        )
         // (The two scripted probe drivers that used to sit here — `WOW_PROBE_LOOK`'s
         // mouse-turn and `WOW_PROBE_CAM`'s camera park — are the harness's now, and register
         // themselves against `control` from there: decision 1174 moved every instrument out of
