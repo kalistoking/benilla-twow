@@ -106,6 +106,12 @@ fn load_world_map(mut commands: Commands, world_assets: Option<Res<WorldAssets>>
     match load_map_catalog(&mut chain) {
         Ok(c) => {
             info!("Map.dbc: {} maps catalogued", c.len());
+            for &id in c.restored() {
+                info!(
+                    "Map.dbc: map {id} ({}) restored from a shadowed Map.dbc copy (its row is gone from the winning file, its WDT is not)",
+                    c.directory(id).unwrap_or("?")
+                );
+            }
             commands.insert_resource(MapCatalogRes(c));
             // `$WOW_MAP` seeds a different continent for a SERVER-LESS run (a `WOW_CAPTURE=vista`
             // shot in Kalimdor, say — a `Map.dbc` id; 1 = Kalimdor). Live sessions are unaffected:

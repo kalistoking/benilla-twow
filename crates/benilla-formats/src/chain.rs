@@ -158,6 +158,22 @@ impl Chain {
         self.read(name)
     }
 
+    /// Every archive's own readable copy of `name`, **highest priority first** — the winner
+    /// [`Chain::read`] returns, then each copy it shadows. Stops at a tombstone (nothing below a
+    /// delete-marker is part of the composite, 0246); a copy that fails to read is skipped.
+    pub fn read_each(&self, name: &str) -> Vec<(&Path, Vec<u8>)> {
+        let mut out = Vec::new();
+        for a in self.archives.iter().rev().filter(|a| a.contains(name)) {
+            if a.is_delete_marker(name) {
+                break;
+            }
+            if let Ok(bytes) = a.read_file(name) {
+                out.push((a.path(), bytes));
+            }
+        }
+        out
+    }
+
     /// List the chain's named files with sizes. Dev/extract use only — files absent from every
     /// listfile (most of `texture.MPQ`) are reachable by name but not enumerated.
     ///

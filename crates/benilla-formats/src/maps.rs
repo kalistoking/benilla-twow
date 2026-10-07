@@ -46,6 +46,8 @@ pub struct MapCatalog {
     /// `mapId → ` the columns the battleground list and queue verbs read off the row
     /// (see [`MapBattlegroundColumns`]) — every row, because the client resolves map 0 too.
     battleground: HashMap<u32, MapBattlegroundColumns>,
+    /// Ids [`restore_shadowed_rows`] took from a shadowed copy, in the order restored.
+    restored: Vec<u32>,
 }
 
 /// The Map.dbc columns the client's battleground family reads by row offset (wow-re
@@ -140,6 +142,11 @@ impl MapCatalog {
         self.battleground.get(&map_id)
     }
 
+    /// The map ids whose row came from a shadowed Map.dbc copy (see [`restore_shadowed_rows`]).
+    pub fn restored(&self) -> &[u32] {
+        &self.restored
+    }
+
     pub fn len(&self) -> usize {
         self.dirs.len()
     }
@@ -198,12 +205,56 @@ fn map_schema() -> Schema {
     s
 }
 
-/// Read Map.dbc off the patch chain into a [`MapCatalog`].
+/// Read Map.dbc off the patch chain into a [`MapCatalog`], then [`restore_shadowed_rows`] from
+/// the copies the winning file shadows.
 pub fn load_map_catalog(chain: &mut Chain) -> Result<MapCatalog> {
     let bytes = chain
         .read_file(MAP)
         .with_context(|| format!("reading {MAP}"))?;
-    let rs = parse(&bytes, map_schema(), "Map")?;
+    let mut catalog = parse_map_dbc(&bytes, |_, _| true)?;
+    let shadowed: Vec<Vec<u8>> = chain
+        .read_each(MAP)
+        .into_iter()
+        .skip(1)
+        .map(|c| c.1)
+        .collect();
+    restore_shadowed_rows(&mut catalog, &shadowed, |dir| {
+        chain.contains(&format!("World\\Maps\\{dir}\\{dir}.wdt"))
+    });
+    Ok(catalog)
+}
+
+/// **Turtle (B115).** A DBC overrides whole-file, so a later patch that drops a row drops the
+/// map: Turtle's `patch-3` Map.dbc has `45 ScarletCitadel`, `patch-4`..`patch-9` do not, yet
+/// `World\Maps\ScarletCitadel` still ships in `patch-3` — and a restoration server sends map 45.
+/// For an id the winning file has **no row** for, take the highest-priority shadowed copy's row,
+/// but only when its world exists (`has_wdt(dir)`): an id with a row is never touched, and a row
+/// whose WDT is gone stays absent (the terrain streamer's vacuity path keeps covering it).
+/// `shadowed` is highest priority first; a copy our 42-field schema cannot read is skipped.
+pub(crate) fn restore_shadowed_rows(
+    catalog: &mut MapCatalog,
+    shadowed: &[Vec<u8>],
+    has_wdt: impl Fn(&str) -> bool,
+) {
+    for bytes in shadowed {
+        let present: Vec<u32> = catalog.battleground.keys().copied().collect();
+        let Ok(old) = parse_map_dbc(bytes, |id, dir| !present.contains(&id) && has_wdt(dir)) else {
+            continue;
+        };
+        let mut ids: Vec<u32> = old.dirs.keys().copied().collect();
+        ids.sort_unstable();
+        catalog.restored.extend(ids);
+        catalog.dirs.extend(old.dirs);
+        catalog.names.extend(old.names);
+        catalog.loading_screens.extend(old.loading_screens);
+        catalog.instance_types.extend(old.instance_types);
+        catalog.battleground.extend(old.battleground);
+    }
+}
+
+/// Parse one Map.dbc copy, keeping the rows `keep(id, directory)` accepts.
+fn parse_map_dbc(bytes: &[u8], keep: impl Fn(u32, &str) -> bool) -> Result<MapCatalog> {
+    let rs = parse(bytes, map_schema(), "Map")?;
     let mut dirs = HashMap::with_capacity(rs.records().len());
     let mut names = HashMap::with_capacity(rs.records().len());
     let mut loading_screens = HashMap::new();
@@ -211,6 +262,9 @@ pub fn load_map_catalog(chain: &mut Chain) -> Result<MapCatalog> {
     let mut battleground = HashMap::with_capacity(rs.records().len());
     for r in rs.records() {
         let Some(id) = u32_at(r, 0) else { continue };
+        if !keep(id, &str_at(&rs, r, 1).unwrap_or_default()) {
+            continue;
+        }
         battleground.insert(
             id,
             MapBattlegroundColumns {
@@ -251,12 +305,88 @@ pub fn load_map_catalog(chain: &mut Chain) -> Result<MapCatalog> {
         loading_screens,
         instance_types,
         battleground,
+        restored: Vec::new(),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 42-field / 168-byte Map.dbc holding `(id, directory, loading screen)` rows.
+    fn map_dbc(rows: &[(u32, &str, u32)]) -> Vec<u8> {
+        let mut strings = vec![0u8];
+        let mut recs = Vec::new();
+        for &(id, dir, ls) in rows {
+            let mut f = [0u32; 42];
+            f[0] = id;
+            f[1] = strings.len() as u32;
+            f[LOADING_SCREEN_FIELD] = ls;
+            strings.extend_from_slice(dir.as_bytes());
+            strings.push(0);
+            recs.extend(f.iter().flat_map(|v| v.to_le_bytes()));
+        }
+        let mut out = b"WDBC".to_vec();
+        for v in [rows.len() as u32, 42, 168, strings.len() as u32] {
+            out.extend(v.to_le_bytes());
+        }
+        out.extend(recs);
+        out.extend(strings);
+        out
+    }
+
+    /// B115: Turtle's patch-3 Map.dbc has `45 ScarletCitadel` (its WDT ships in patch-3), the
+    /// winning patch-9 copy has no row 45 — the id comes back from the shadowed copy. A row the
+    /// winner has is never replaced, a shadowed row without a WDT stays absent, and the higher
+    /// of two shadowed copies wins.
+    #[test]
+    fn a_row_gone_from_the_winning_map_dbc_comes_back_when_its_world_exists() {
+        let winner = map_dbc(&[(0, "Azeroth", 4), (36, "DeadminesInstance", 142)]);
+        let mut catalog = parse_map_dbc(&winner, |_, _| true).expect("winner");
+        let patch8 = map_dbc(&[(36, "OldDeadmines", 1), (44, "Monastery", 190)]);
+        let patch3 = map_dbc(&[
+            (44, "OlderMonastery", 1),
+            (45, "ScarletCitadel", 509),
+            (803, "Northrend", 513),
+        ]);
+        let worlds = [
+            "Monastery",
+            "OlderMonastery",
+            "ScarletCitadel",
+            "OldDeadmines",
+        ];
+        restore_shadowed_rows(&mut catalog, &[patch8, patch3], |d| worlds.contains(&d));
+        assert_eq!(catalog.directory(45), Some("ScarletCitadel"));
+        assert_eq!(catalog.loading_screen_id(45), Some(509));
+        assert_eq!(
+            catalog.directory(36),
+            Some("DeadminesInstance"),
+            "the winner's row stays"
+        );
+        assert_eq!(
+            catalog.directory(44),
+            Some("Monastery"),
+            "the higher shadowed copy wins"
+        );
+        assert_eq!(catalog.directory(803), None, "no WDT, no row");
+        assert_eq!(catalog.restored(), &[44, 45]);
+        assert_eq!(catalog.len(), 4);
+    }
+
+    /// B115 on the real chain: an install that ships `World\Maps\ScarletCitadel` (Turtle 1.18.1,
+    /// patch-3) resolves map 45 to it with its loading screen. Skips on an install without it.
+    #[test]
+    fn map_45_resolves_to_scarlet_citadel_on_a_turtle_install() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        if !chain.contains("World\\Maps\\ScarletCitadel\\ScarletCitadel.wdt") {
+            return;
+        }
+        let catalog = load_map_catalog(&mut chain).expect("Map.dbc");
+        assert_eq!(catalog.directory(45), Some("ScarletCitadel"));
+        assert_eq!(catalog.loading_screen_id(45), Some(509));
+        assert!(catalog.restored().contains(&45), "{:?}", catalog.restored());
+    }
 
     /// The battleground columns off the shipped patch-2 `Map.dbc`, and the bracket arithmetic the
     /// list and status handlers run on them (wow-re `battlefield-verb-family.md` §4.1).
