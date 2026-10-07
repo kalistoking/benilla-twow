@@ -3057,6 +3057,9 @@ pub enum HostWire {
     /// `_DEADTARGET` / `_CANT_ATTACK`) -- a swing lost, which the client only tells as a red line
     /// of text.
     SwingRefused(benilla_protocol::AttackSwingError),
+    /// `SMSG_EMOTE`: a unit played an `Emotes.dbc` emote (a one-shot kneel lasts about a second,
+    /// so a picture taken after it misses what this line keeps).
+    Emote { guid: u64, emote_id: u32 },
 }
 
 /// Which of the three pushes a [`HostWire::Sound`] was.

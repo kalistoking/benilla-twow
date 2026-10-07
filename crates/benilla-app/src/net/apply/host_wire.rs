@@ -1,5 +1,5 @@
-//! **The embedder's wire tap** -- [`HostWire`], one message per spell, sound or swing-refusal
-//! packet, written from the drain's own events before any arm runs, so no gate an arm has (a
+//! **The embedder's wire tap** -- [`HostWire`], one message per spell, sound, swing-refusal or
+//! emote packet, written from the drain's own events before any arm runs, so no gate an arm has (a
 //! streamed-or-not lookup, a cast-time branch, a music slot that already holds the kit) can hide
 //! a packet from the host. Read-only: no arm reads it back, and a message nobody reads is dropped
 //! by Bevy.
@@ -61,6 +61,10 @@ fn wire_of(ev: &SessionEvent) -> Option<HostWire> {
             source: Some(*guid),
         },
         SessionEvent::AttackSwingError(e) => HostWire::SwingRefused(*e),
+        SessionEvent::Emote { guid, emote_id } => HostWire::Emote {
+            guid: *guid,
+            emote_id: *emote_id,
+        },
         _ => return None,
     })
 }
@@ -211,6 +215,15 @@ mod tests {
         for e in [E::BadFacing, E::NotInRange, E::DeadOrUnattackable] {
             assert_eq!(wire_of(&SessionEvent::AttackSwingError(e)), Some(HostWire::SwingRefused(e)));
         }
+    }
+
+    /// An emote is told with its performer -- the kneel at a rune lasts about a second.
+    #[test]
+    fn an_emote_is_told_with_its_performer() {
+        assert_eq!(
+            wire_of(&SessionEvent::Emote { guid: 0x1, emote_id: 16 }),
+            Some(HostWire::Emote { guid: 0x1, emote_id: 16 })
+        );
     }
 
     /// Through the real drain on the built client: the packets reach the host's message queue in
