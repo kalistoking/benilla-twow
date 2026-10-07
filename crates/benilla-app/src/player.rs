@@ -122,10 +122,9 @@ pub use host_step::{HostStepBack, HostSteppedBack};
 // what lets this module and the concern modules beside it keep naming them `super::X` unchanged.
 use state::{
     MoveSpeed, PlayerRide, AIR_NUDGE_SPEED, FALL_FAR_DROP, FALL_FAR_TIME, FOOT_CONE_HEIGHT,
-    GROUND_COS, GROUND_PROBE, JUMP_SPEED, LAND_PROBE, MOUSELOOK_PITCH_CLAMP, RUN_BACK_RATIO,
-    SKIN_WIDTH, STATIONARY_CHASE_RATE, STEP_SLOPE_RATIO, STEP_SNAP_SLACK, STEP_UP_ADVANCE_PER_YARD,
-    TURN_RATE, TURN_RATE_MOVING, WALK_RATIO, WATER_WALK_PITCH_FLOOR, WEDGE_MIN_FALL,
-    WEDGE_STALL_RATIO, WEDGE_STILL_FRAMES,
+    GROUND_COS, GROUND_PROBE, JUMP_SPEED, LAND_PROBE, MOUSELOOK_PITCH_CLAMP, SKIN_WIDTH,
+    STATIONARY_CHASE_RATE, STEP_SLOPE_RATIO, STEP_SNAP_SLACK, STEP_UP_ADVANCE_PER_YARD, TURN_RATE,
+    TURN_RATE_MOVING, WATER_WALK_PITCH_FLOOR, WEDGE_MIN_FALL, WEDGE_STALL_RATIO, WEDGE_STILL_FRAMES,
 };
 // `SETTLE_TIMEOUT` is `pub(crate)`: the settle release lives in the terrain streamer (decision
 // 0737 — residency releases the hold, not ground contact), which owns the deadline push while the

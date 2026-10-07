@@ -762,16 +762,9 @@ pub(super) fn control(
         // create's LIVING block, moved live by SMSG_FORCE_*_SPEED_CHANGE, so `.modify speed`,
         // mounts and slows actually move us at the server's number), or the `$WOW_MOVE_SPEED` dev
         // override's synthetic set, which keeps the vanilla 2.5/4.5/7.0 ratios so that walking and
-        // backpedaling stay themselves under it. Pre-create frames take the same fallback.
-        let speeds = match mover_speeds {
-            Some(s) if !move_speed.env_override => s,
-            _ => benilla_protocol::MoveSpeeds {
-                walk: move_speed.value * WALK_RATIO,
-                run: move_speed.value,
-                run_back: move_speed.value * RUN_BACK_RATIO,
-                ..Default::default()
-            },
-        };
+        // backpedaling stay themselves under it. Pre-create frames take the same fallback
+        // ([`MoveSpeed::speeds`], the one set a host's step back reads too).
+        let speeds = move_speed.speeds(mover_speeds);
         // …turned into a yards/second by the ONE statement of the reference's
         // `GetCurrentSpeed 0x7c4c90` ([`crate::net::current_speed`]), the same call the remote
         // extrapolator makes — so our own body and every body we watch agree about the cascade,

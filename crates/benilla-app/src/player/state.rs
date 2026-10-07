@@ -330,6 +330,28 @@ pub(super) struct MoveSpeed {
     pub(super) env_override: bool,
 }
 
+impl MoveSpeed {
+    /// The mover's speed SET for a frame: the server's (`granted`, the driven body's
+    /// [`crate::net::UnitSpeeds`]), or -- before the create lands, or under `$WOW_MOVE_SPEED` --
+    /// the synthetic set built from [`Self::value`], which keeps the vanilla 2.5/4.5/7.0 ratios so
+    /// that walking and backpedaling stay themselves under it. The controller's ground arm and a
+    /// host's step back ([`super::host_step`]) read the one set.
+    pub(super) fn speeds(
+        &self,
+        granted: Option<benilla_protocol::MoveSpeeds>,
+    ) -> benilla_protocol::MoveSpeeds {
+        match granted {
+            Some(s) if !self.env_override => s,
+            _ => benilla_protocol::MoveSpeeds {
+                walk: self.value * WALK_RATIO,
+                run: self.value,
+                run_back: self.value * RUN_BACK_RATIO,
+                ..Default::default()
+            },
+        }
+    }
+}
+
 /// **The granted mover modes — one system, five bits** (decision 0866).
 ///
 /// A *mode* is a `MOVEMENTFLAGS` bit the **server grants** that changes how our mover behaves rather
