@@ -224,7 +224,7 @@ fn wrap_pi(a: f32) -> f32 {
 /// `control` builds `move_fwd = Quat::from_rotation_y(face_yaw) * NEG_Z`, which expands to
 /// `(-sin y, 0, -cos y)`. Solving `(-sin y, -cos y) ∝ (dx, dz)` gives `y = atan2(-dx, -dz)`. Tied to
 /// the expression it must agree with, so it cannot drift out of sign with it.
-fn bearing_to(delta: Vec3) -> f32 {
+pub(super) fn bearing_to(delta: Vec3) -> f32 {
     (-delta.x).atan2(-delta.z)
 }
 

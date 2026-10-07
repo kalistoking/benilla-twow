@@ -301,6 +301,10 @@ pub use target::{HostUseObject, HostUsedObject};
 /// A host's turn to the current target -- the player's own turn, sent as `MSG_MOVE_SET_FACING`,
 /// with the camera put behind -- and what it did. See [`target::HostFaceTarget`].
 pub use target::{HostFaceTarget, HostFacedTarget, TargetSize};
+/// A host's step back from the current target -- a turn away and a short walk as the player's own
+/// forward key, then the turn to the target again -- and how far it got. See
+/// [`player::HostStepBack`].
+pub use player::{HostStepBack, HostSteppedBack};
 /// What the player cast while no server listens -- for a host that plays the server itself.
 pub use net::HostCast;
 /// What the server told the client -- the spell packets and the pushed sounds, raw, for a host

@@ -67,6 +67,8 @@ mod embody;
 // read (decision 0056).
 mod flags;
 mod follow;
+/// A host's step back from the target: a turn away and a short walk on the follow's forward flag.
+mod host_step;
 
 mod gait;
 // This frame's decoded input — the netted movement axes and the camera's command word
@@ -115,6 +117,7 @@ use camera::{
 };
 pub(crate) use camera::{head_height, CameraControl, CameraPivot};
 pub(crate) use follow::{FollowRequest, FollowState};
+pub use host_step::{HostStepBack, HostSteppedBack};
 // The shared avatar state + movement constants live in [`state`]; the private re-imports below are
 // what lets this module and the concern modules beside it keep naming them `super::X` unchanged.
 use state::{
@@ -302,6 +305,7 @@ pub(crate) struct PlayerPlugin;
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         follow::plugin(app);
+        host_step::plugin(app);
         camera_saved::plugin(app);
         camera_view::plugin(app);
         // 1160's wire (a), both directions (see `world_focus`): the game answers the world's
