@@ -78,6 +78,11 @@ const FRAME_DISTANCE_CAP: f32 = 50.0;
 /// pair of feet exactly on the edge would be under the interface.
 const FRAME_MARGIN: f32 = 0.08;
 
+/// The least ground step [`framing`] follows (yards): a dais, a ledge. The band the target's rise
+/// counts within is `height.max(FRAME_RISE_FLOOR)`, so a small target is not framed from the cap
+/// because One was thrown, or stands on a cliff, tens of yards from its feet.
+const FRAME_RISE_FLOOR: f32 = 4.0;
+
 /// How much shorter than asked the realized arm may be before the framing counts as cut (yards):
 /// the sweep's own margin (the probe radius sits off every surface) is a few inches, not a frame.
 const CLIP_TOLERANCE: f32 = 0.05;
@@ -231,6 +236,9 @@ struct Framing {
 ///    [`COVERAGE_GAIN`]): a pitch
 ///    tilted differently lifts the camera over a dune or a wall's foot that another arm runs into.
 ///
+/// The rise counts up to the band (`height.max(`[`FRAME_RISE_FLOOR`]`)`): a throw, a cliff or a pit
+/// beyond it is One's placement, not the target's size, and leaves the target's feet out of frame.
+///
 /// No scene (no size known) is the ordinary framing, at the ordinary pitch; its arm is still
 /// measured, so the distance told is the truth.
 fn framing(scene: Option<Scene>, arm: impl Fn(f32, f32) -> f32) -> Framing {
@@ -246,11 +254,13 @@ fn framing(scene: Option<Scene>, arm: impl Fn(f32, f32) -> f32) -> Framing {
     };
     let half = CAM_FOVY * 0.5 - FRAME_MARGIN;
     let sin_half = half.sin();
-    let top = s.rise + s.height;
+    let band = s.height.max(FRAME_RISE_FLOOR);
+    let rise = s.rise.clamp(-band, band);
+    let top = rise + s.height;
     let need = |p: f32| {
         let (up, down) = (p + half, p - half);
         let head = ((top - s.pivot) * up.cos() - s.ahead * up.sin()) / sin_half;
-        let feet = ((s.pivot - s.rise) * down.cos() + s.ahead * down.sin()) / sin_half;
+        let feet = ((s.pivot - rise) * down.cos() + s.ahead * down.sin()) / sin_half;
         let own_feet = s.pivot * down.cos() / sin_half;
         FRAME_DISTANCE.max(head).max(feet).max(own_feet)
     };
@@ -710,6 +720,59 @@ mod tests {
             let (d, p) = framing(Some(s));
             assert!(fits(d, p, s), "rise {rise}: {d} yd {p} rad");
         }
+    }
+
+    /// A character thrown far above a small target (a19-20261007-015044: Eldermaw's Tail Slap) keeps
+    /// the ordinary camera: the five face lines' (ahead, rise) each asked `FRAME_DISTANCE_CAP`
+    /// before the clamp (they needed 56.8 / 137.6 / 163.8 / 135.4 / 52.3 yd).
+    #[test]
+    fn a_thrown_character_keeps_a_small_target_at_the_ordinary_distance() {
+        for (ahead, rise) in [
+            (5.5, -21.3),
+            (10.4, -52.6),
+            (15.3, -64.7),
+            (20.2, -57.4),
+            (25.1, -30.8),
+        ] {
+            let s = Scene {
+                rise,
+                ..scene(3.7, ahead).unwrap()
+            };
+            assert_eq!(
+                framing(Some(s)),
+                (FRAME_DISTANCE, FRAME_PITCH),
+                "{ahead} yd ahead, rise {rise}"
+            );
+        }
+    }
+
+    /// A small target far above the character is framed by its size, not pulled back to its feet.
+    #[test]
+    fn a_target_far_above_is_framed_by_its_size() {
+        let s = Scene {
+            rise: 30.0,
+            ..scene(3.7, 5.0).unwrap()
+        };
+        let (d, _) = framing(Some(s));
+        assert!(d < 20.0, "{d}");
+    }
+
+    /// The rise counts up to the band (a 3.7 yd target: 4 yd) and no further.
+    #[test]
+    fn the_rise_is_clamped_to_the_band() {
+        let at = |ahead: f32, rise: f32| {
+            framing(Some(Scene {
+                rise,
+                ..scene(3.7, ahead).unwrap()
+            }))
+        };
+        let (far, p_far) = at(0.0, -30.0);
+        let (near, p_near) = at(0.0, -4.0);
+        assert_eq!((far, p_far), (near, p_near));
+        assert!((near - 16.43).abs() < 0.05 && (p_near - FRAME_PITCH).abs() < 1e-6, "{near} {p_near}");
+        let (d, _) = at(3.0, -4.0);
+        assert!((d - 11.65).abs() < 0.05, "{d}");
+        assert_eq!(at(5.5, -4.0), (FRAME_DISTANCE, FRAME_PITCH));
     }
 
     /// The Anubisath Guardian of the proof run: 19.5 yd tall (its Stand box x 2.5), at melee range.
