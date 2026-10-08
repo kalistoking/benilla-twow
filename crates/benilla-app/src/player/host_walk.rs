@@ -19,8 +19,16 @@
 //!    prints), so a log line can be set beside the GM's reading.
 //!
 //! Speed and stall are measured as the step back measures them ([`forward_speed`]): against the
-//! speed the controller really moves the body at. A [`WalkAim::Point`] walk asks for at most the
-//! distance to the point, so it ends on the point and says it was not blocked.
+//! speed the controller really moves the body at. A [`WalkAim::Point`] walk asks for the distance
+//! to the point, so it ends on the point.
+//!
+//! **Reached means got there.** The walk is judged on where the body ended ([`Goal`]): within a yard
+//! of the point, or having made the asked yards (less a yard) along the heading it started on -- a
+//! body that slid along a wall has covered the ground and is answered blocked. A teleport mid-walk
+//! (one frame's move beyond what the speed allows, or the player gone) ends the walk blocked, with
+//! the ground covered before it, and does not resume. A point already within a yard is answered at
+//! once as reached with nothing walked; a point farther than [`MAX_WALK`] is refused at once
+//! (`asked` is its distance, blocked, nothing walked).
 //!
 //! A request that cannot be walked (yards not a positive number, a point that is not finite, a
 //! speed of nothing) is answered on its first frame as blocked with nothing walked: no turn, no
@@ -65,17 +73,43 @@ pub struct HostWalk {
 /// What a [`HostWalk`] did.
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
 pub struct HostWalked {
-    /// The yards the walk aimed at: those asked (at most [`MAX_WALK`]), for a point at most the
-    /// ground distance to it. The yards as asked when the request could not be walked.
+    /// The yards the walk aimed at: those asked (at most [`MAX_WALK`]), for a point the ground
+    /// distance to it (over [`MAX_WALK`]: refused, `asked` says how far it was). The yards as asked
+    /// when the request could not be walked.
     pub asked: f32,
     /// The ground covered from where he stood (yards).
     pub walked: f32,
-    /// The walk was given up short of `asked` (no headway for [`STALL_AFTER`], out of time, a
-    /// speed of nothing) or could not be walked at all.
+    /// The walk did not get there: given up short of `asked` (no headway for [`STALL_AFTER`], out
+    /// of time, a speed of nothing, a teleport), ended away from the point or heading, or could not
+    /// be walked at all.
     pub blocked: bool,
     /// Where the body ended, in the server's coordinates `[x, y, z]`.
     pub end: [f32; 3],
 }
+
+/// What counts as having got there: the walk is judged on where the body ended, not on the ground
+/// it covered (a body that slides along a wall covers the ground and gets nowhere).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Goal {
+    /// A point (Bevy space, height ignored): reached within [`REACH`] of it.
+    Point(Vec3),
+    /// A heading (horizontal, unit): reached when the headway made along it is within [`REACH`] of
+    /// the asked yards.
+    Axis(Vec3),
+}
+
+impl Goal {
+    fn reached(self, from: Vec3, end: Vec3, asked: f32) -> bool {
+        match self {
+            Goal::Point(p) => ground(end, p) <= REACH,
+            Goal::Axis(a) => Vec3::new(end.x - from.x, 0.0, end.z - from.z).dot(a) >= asked - REACH,
+        }
+    }
+}
+
+/// How near the end must be to the point (or to the asked yards along the heading) to count as
+/// reached, and how near a point may already be for a walk to it to need no step at all (yards).
+const REACH: f32 = 1.0;
 
 /// Where the walk is. Between requests, [`Run::Idle`].
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
@@ -84,24 +118,35 @@ pub(super) enum Run {
     Idle,
     /// Turned on the last frame (or not at all); the key goes down on this one, so the server hears
     /// the turn before the first step.
-    Turned { from: Vec3, asked: f32 },
+    Turned { from: Vec3, asked: f32, goal: Goal },
     /// The forward key is held.
     Walking {
         from: Vec3,
         asked: f32,
+        goal: Goal,
         /// Seconds since the key went down.
         elapsed: f32,
         /// Seconds without headway.
         stalled: f32,
         /// Where the body stood on the last frame.
         last: Vec3,
+        /// The yards the body could have covered so far: the sum of each frame's speed times its
+        /// dt. The time-out is measured on this (see below), not on the clock, so a speed that
+        /// changes mid-walk (a snare ending, walk mode toggled) cannot shrink the bound.
+        potential: f32,
+        /// The fastest speed seen so far; the time-out's slack is [`TIME_SLACK`] seconds of it.
+        top_speed: f32,
     },
     /// The key was released on the last frame (that frame's controller sent the stop); this one
     /// measures and answers.
     Settling {
         from: Vec3,
         asked: f32,
+        goal: Goal,
         blocked: bool,
+        /// Where to measure and report the end when the body is not to be read where it stands now
+        /// (it was carried off: a teleport mid-walk). `None`: where it stands.
+        end: Option<Vec3>,
     },
 }
 
@@ -121,7 +166,28 @@ fn delta_to_point(pos: Vec3, x: f32, y: f32) -> Option<Vec3> {
     Some(Vec3::new(at.x - pos.x, 0.0, at.z - pos.z))
 }
 
+/// Answer a request on the spot: the request is withdrawn and `HostWalked` written, nothing walked.
+fn answer_now(
+    commands: &mut Commands,
+    told: &mut MessageWriter<HostWalked>,
+    asked: f32,
+    blocked: bool,
+    pos: Vec3,
+) {
+    commands.remove_resource::<HostWalk>();
+    told.write(HostWalked {
+        asked,
+        walked: 0.0,
+        blocked,
+        end: bevy_to_wow(pos),
+    });
+}
+
 /// Resolve the pending request: turn, walk, release, answer.
+///
+/// note: the end's height is wherever the body is when the key is released (it may be mid-air on a
+/// slope or a jump); a host reads X and Y. note: a host asks for one walk (or step back) at a time
+/// -- the two requests share the one forward flag, and nothing here enforces it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn walk(
     mut commands: Commands,
@@ -139,6 +205,26 @@ pub(super) fn walk(
         return; // nothing asked
     };
     if self_player.single().is_err() {
+        if *run != Run::Idle {
+            // The body is gone mid-walk (a map change, a drop): the walk is over, not reached, and
+            // must not pick up again when a body comes back.
+            info!("host walk: the player is gone, ended");
+            player.follow_forward = false;
+            let (from, asked) = match *run {
+                Run::Turned { from, asked, .. }
+                | Run::Walking { from, asked, .. }
+                | Run::Settling { from, asked, .. } => (from, asked),
+                Run::Idle => unreachable!(),
+            };
+            *run = Run::Idle;
+            commands.remove_resource::<HostWalk>();
+            told.write(HostWalked {
+                asked,
+                walked: ground(player.pos, from),
+                blocked: true,
+                end: bevy_to_wow(player.pos),
+            });
+        }
         return; // not in the world yet -- pending, silent
     }
     let dt = time.delta_secs();
@@ -147,98 +233,147 @@ pub(super) fn walk(
     let speed = forward_speed(granted, &move_speed, player.walking, player.swimming);
     match *run {
         Run::Idle => {
-            let yards = walk_yards(request.yards);
-            // The aim, resolved against where he stands now: the yards to walk and the turn to take.
-            let aimed = match request.aim {
-                WalkAim::Facing => yards.map(|y| (y, 0.0)),
-                WalkAim::Point { x, y } => yards.zip(delta_to_point(pos, x, y)).map(|(yards, d)| {
-                    let to_point = d.length();
-                    let turn = if to_point > f32::EPSILON {
-                        super::wrap_pi(bearing_to(d) - player.facing())
-                    } else {
-                        0.0
-                    };
-                    (yards.min(to_point), turn)
-                }),
-            };
-            // A point he already stands on is walked zero yards: nothing to walk, answered now.
-            let Some((asked, turn)) = aimed.filter(|(a, _)| *a > 0.0).filter(|_| speed.is_some())
-            else {
-                debug!(
-                    "host walk: not walked ({} yd asked, {:?}, speed {speed:?})",
-                    request.yards, request.aim,
-                );
-                commands.remove_resource::<HostWalk>();
-                told.write(HostWalked {
-                    asked: request.yards,
-                    walked: 0.0,
-                    blocked: true,
-                    end: bevy_to_wow(pos),
-                });
+            // The aim, resolved against where he stands now: the yards to walk, the turn to take and
+            // what counts as being there.
+            let Some(yards) = walk_yards(request.yards) else {
+                debug!("host walk: not walked ({} yd asked, {:?})", request.yards, request.aim);
+                answer_now(&mut commands, &mut told, request.yards, true, pos);
                 return;
             };
+            let (asked, turn, goal) = match request.aim {
+                WalkAim::Facing => {
+                    let forward = Quat::from_rotation_y(player.facing()) * Vec3::NEG_Z;
+                    (yards, 0.0, Goal::Axis(Vec3::new(forward.x, 0.0, forward.z)))
+                }
+                WalkAim::Point { x, y } => {
+                    let Some(d) = delta_to_point(pos, x, y) else {
+                        debug!("host walk: not walked (point {x}, {y} is not finite)");
+                        answer_now(&mut commands, &mut told, request.yards, true, pos);
+                        return;
+                    };
+                    let to_point = d.length();
+                    if to_point > MAX_WALK {
+                        // Walking the cap would end short of the point and could not say "reached".
+                        info!(
+                            "host walk: point {to_point:.0} yd away, over the {MAX_WALK:.0} yd cap, not walked"
+                        );
+                        answer_now(&mut commands, &mut told, to_point, true, pos);
+                        return;
+                    }
+                    if to_point <= REACH {
+                        // Already there: nothing to walk, and nothing in the way.
+                        debug!("host walk: already at the point ({to_point:.1} yd)");
+                        answer_now(&mut commands, &mut told, to_point, false, pos);
+                        return;
+                    }
+                    let turn = super::wrap_pi(bearing_to(d) - player.facing());
+                    if yards >= to_point {
+                        (to_point, turn, Goal::Point(pos + d))
+                    } else {
+                        (yards, turn, Goal::Axis(d / to_point))
+                    }
+                }
+            };
+            if speed.is_none() {
+                debug!("host walk: not walked ({} yd asked, {:?}, no speed)", request.yards, request.aim);
+                answer_now(&mut commands, &mut told, request.yards, true, pos);
+                return;
+            }
             if turn != 0.0 {
                 player.turn_aim(turn);
             }
-            *run = Run::Turned { from: pos, asked };
+            *run = Run::Turned { from: pos, asked, goal };
         }
-        Run::Turned { from, asked } => {
+        Run::Turned { from, asked, goal } => {
             player.follow_forward = true;
             *run = Run::Walking {
                 from,
                 asked,
+                goal,
                 elapsed: 0.0,
                 stalled: 0.0,
                 last: pos,
+                potential: 0.0,
+                top_speed: 0.0,
             };
         }
         Run::Walking {
             from,
             asked,
+            goal,
             elapsed,
             mut stalled,
             last,
+            mut potential,
+            mut top_speed,
         } => {
             let elapsed = elapsed + dt;
             let walked = ground(pos, from);
             // The speed fell to nothing mid-walk: the key comes up on this frame, blocked -- no
             // headway can be measured against nothing.
-            let (done, given_up) = match speed {
+            let (done, given_up, jumped) = match speed {
                 Some(speed) => {
+                    // A frame's move far beyond what the body can walk in it is a teleport (a
+                    // `.go`, a map change, a snap back): the walk is over, not reached, and the
+                    // ground it covered is what it covered before the jump.
+                    let jumped = ground(pos, last) > 2.0 * speed * dt + 1.0;
                     if ground(pos, last) < HEADWAY_SHARE * speed * dt && elapsed > 0.25 {
                         stalled += dt;
                     } else {
                         stalled = 0.0;
                     }
-                    let timed_out = elapsed > asked / speed + TIME_SLACK;
+                    // The time-out: the walk has had the yards it could cover at its speeds so far
+                    // (summed per frame) plus `TIME_SLACK` seconds of the fastest speed seen. The
+                    // sum only grows and the slack only grows, so a speed that rises mid-walk (a
+                    // snare ends) cannot cut a slow start short; at one steady speed it is the
+                    // plain `asked / speed + TIME_SLACK` seconds.
+                    potential += speed * dt;
+                    top_speed = top_speed.max(speed);
+                    let timed_out = potential > asked + TIME_SLACK * top_speed;
                     (
-                        walked_enough(walked, asked, speed, dt),
-                        stalled >= STALL_AFTER || timed_out,
+                        !jumped && walked_enough(walked, asked, speed, dt),
+                        stalled >= STALL_AFTER || timed_out || jumped,
+                        jumped,
                     )
                 }
-                None => (false, true),
+                None => (false, true, false),
             };
             if done || given_up {
+                if jumped {
+                    info!(
+                        "host walk: position jumped {:.0} yd in one frame, ended",
+                        ground(pos, last)
+                    );
+                }
                 // The key is released here: this frame's controller is the one that stops.
                 *run = Run::Settling {
                     from,
                     asked,
+                    goal,
                     blocked: !done,
+                    end: jumped.then_some(last),
                 };
             } else {
                 player.follow_forward = true;
                 *run = Run::Walking {
                     from,
                     asked,
+                    goal,
                     elapsed,
                     stalled,
                     last: pos,
+                    potential,
+                    top_speed,
                 };
             }
         }
-        Run::Settling { from, asked, blocked } => {
-            let walked = ground(pos, from);
-            let end = bevy_to_wow(pos);
+        Run::Settling { from, asked, goal, blocked, end } => {
+            let at = end.unwrap_or(pos);
+            let walked = ground(at, from);
+            // Sliding along a wall covers the ground without getting there: reached is judged on
+            // the end, against the point or the heading.
+            let blocked = blocked || !goal.reached(from, at, asked);
+            let end = bevy_to_wow(at);
             debug!(
                 "host walk: walked {walked:.1} yd of {asked:.1}, at X {:.1} Y {:.1}{}",
                 end[0],
@@ -298,6 +433,12 @@ mod tests {
     struct Rig {
         app: App,
         keyed: bool,
+        /// Frames in which the forward key was down.
+        key_frames: u32,
+        /// How fast the "controller" moves the body (yd/s), as the speed set granted.
+        speed: f32,
+        /// The angle the body drifts off its facing as it moves (a slide along a wall).
+        skew: f32,
     }
 
     impl Rig {
@@ -315,7 +456,13 @@ mod tests {
             app.add_message::<HostWalked>();
             app.world_mut()
                 .spawn((SelfPlayer, Embodied, UnitSpeeds(vanilla())));
-            Rig { app, keyed: false }
+            Rig {
+                app,
+                keyed: false,
+                key_frames: 0,
+                speed: 7.0,
+                skew: 0.0,
+            }
         }
 
         fn ask(&mut self, yards: f32, aim: WalkAim) {
@@ -334,8 +481,9 @@ mod tests {
             let mut player = self.app.world_mut().resource_mut::<Player>();
             self.keyed |= player.follow_forward;
             if player.follow_forward {
-                let forward = Quat::from_rotation_y(player.facing()) * Vec3::NEG_Z;
-                let next = player.pos + forward * 7.0 * dt;
+                self.key_frames += 1;
+                let forward = Quat::from_rotation_y(player.facing() + self.skew) * Vec3::NEG_Z;
+                let next = player.pos + forward * self.speed * dt;
                 if wall_x.is_none_or(|w| bevy_to_wow(next)[0] <= w) {
                     player.pos = next;
                 }
@@ -451,7 +599,7 @@ mod tests {
         assert!(!w.blocked && (w.walked - MAX_WALK).abs() < 0.1, "{w:?}");
     }
 
-    /// Yards that are not a positive number, a point that is not a number, a point he stands on:
+    /// Yards that are not a positive number, a point that is not a number:
     /// answered on the first frame as blocked with nothing walked -- no turn, no key.
     #[test]
     fn what_cannot_be_walked_is_answered_at_once() {
@@ -462,7 +610,6 @@ mod tests {
             (f32::INFINITY, WalkAim::Facing),
             (10.0, WalkAim::Point { x: f32::NAN, y: 0.0 }),
             (10.0, WalkAim::Point { x: 0.0, y: f32::INFINITY }),
-            (10.0, WalkAim::Point { x: 0.0, y: 0.0 }),
         ];
         for (yards, aim) in asks {
             let mut rig = Rig::new();
@@ -495,5 +642,155 @@ mod tests {
             "{told:?}"
         );
         assert!(!rig.pending() && !rig.keyed);
+    }
+
+    /// A teleport mid-walk (here 50 yd in one frame, then back) ends the walk as not reached, with
+    /// the ground covered before the jump, the key up -- and it does not pick up when the body is
+    /// back where it was.
+    #[test]
+    fn a_teleport_mid_walk_ends_it_blocked_and_it_does_not_resume() {
+        let mut rig = Rig::new();
+        rig.ask(60.0, WalkAim::Facing);
+        for _ in 0..60 {
+            rig.frame(1.0 / 60.0, None);
+        }
+        let before = rig.pos();
+        rig.app.world_mut().resource_mut::<Player>().pos = before + Vec3::NEG_Z * 50.0;
+        rig.frame(1.0 / 60.0, None); // the jump is seen: the key comes up
+        rig.app.world_mut().resource_mut::<Player>().pos = before; // and he is carried back
+        let keyed = rig.key_frames;
+        rig.walk_out(5.0, None);
+        assert_eq!(rig.key_frames, keyed, "the key stayed up");
+        let told = rig.told();
+        let [w] = told.as_slice() else {
+            panic!("{told:?}");
+        };
+        assert!(w.blocked && w.asked == 60.0, "{w:?}");
+        assert!(w.walked > 6.0 && w.walked < 7.5, "the ground before the jump: {w:?}");
+        assert!(!rig.pending());
+        rig.walk_out(2.0, None);
+        assert!(rig.told().is_empty(), "no second answer");
+    }
+
+    /// The player gone mid-walk (no `SelfPlayer`) answers it at once as blocked.
+    #[test]
+    fn the_player_gone_mid_walk_ends_it_blocked() {
+        let mut rig = Rig::new();
+        rig.ask(60.0, WalkAim::Facing);
+        for _ in 0..30 {
+            rig.frame(1.0 / 60.0, None);
+        }
+        let body = rig
+            .app
+            .world_mut()
+            .query_filtered::<Entity, With<SelfPlayer>>()
+            .single(rig.app.world())
+            .unwrap();
+        rig.app.world_mut().despawn(body);
+        rig.frame(1.0 / 60.0, None);
+        let told = rig.told();
+        assert!(matches!(told.as_slice(), [w] if w.blocked && w.walked > 1.0), "{told:?}");
+        assert!(!rig.pending());
+    }
+
+    /// A point farther than the cap is refused at once -- never answered reached: `asked` is its
+    /// distance, nothing walked, no turn, no key. One at the cap is walked.
+    #[test]
+    fn a_point_over_the_cap_is_refused_at_once() {
+        let mut rig = Rig::new();
+        rig.ask(MAX_WALK, WalkAim::Point { x: 200.0, y: 0.0 });
+        rig.frame(1.0 / 60.0, None);
+        let told = rig.told();
+        let [w] = told.as_slice() else {
+            panic!("{told:?}");
+        };
+        assert!(w.blocked && w.walked == 0.0 && close(w.asked, 200.0), "{w:?}");
+        assert!(!rig.pending() && !rig.keyed);
+        assert_eq!(rig.app.world().resource::<Player>().facing(), 0.0, "no turn");
+
+        let mut rig = Rig::new();
+        rig.ask(MAX_WALK, WalkAim::Point { x: 149.0, y: 0.0 });
+        rig.walk_out(60.0, None);
+        let told = rig.told();
+        assert!(matches!(told.as_slice(), [w] if !w.blocked && close(w.asked, 149.0)), "{told:?}");
+    }
+
+    /// Sliding along a wall covers the ground without getting there: a body that drifts 35 degrees
+    /// off its facing walks the 20 yd asked but makes only 16 yd along it -- blocked.
+    #[test]
+    fn sliding_off_the_heading_is_not_reached() {
+        let mut rig = Rig::new();
+        rig.skew = 0.6;
+        rig.ask(20.0, WalkAim::Facing);
+        rig.walk_out(10.0, None);
+        let told = rig.told();
+        let [w] = told.as_slice() else {
+            panic!("{told:?}");
+        };
+        assert!(w.blocked && (w.walked - 20.0).abs() < 0.1, "{w:?}");
+        assert!(w.end[0] < 19.0, "{w:?}");
+    }
+
+    /// The same drift on a walk to a point ends well away from it: blocked. A body a little off
+    /// (under a yard at the end) still got there.
+    #[test]
+    fn missing_the_point_is_not_reached() {
+        let mut rig = Rig::new();
+        rig.skew = 0.6;
+        rig.ask(MAX_WALK, WalkAim::Point { x: 30.0, y: 0.0 });
+        rig.walk_out(10.0, None);
+        let told = rig.told();
+        let [w] = told.as_slice() else {
+            panic!("{told:?}");
+        };
+        assert!(w.blocked && close(w.asked, 30.0), "{w:?}");
+
+        let mut rig = Rig::new();
+        rig.skew = 0.02; // 0.6 yd off at 30 yd
+        rig.ask(MAX_WALK, WalkAim::Point { x: 30.0, y: 0.0 });
+        rig.walk_out(10.0, None);
+        let told = rig.told();
+        assert!(matches!(told.as_slice(), [w] if !w.blocked), "{told:?}");
+    }
+
+    /// A speed that rises mid-walk does not shrink the time-out: 8 s in walk mode (2.5 yd/s, 20
+    /// yd), then run (7 yd/s) for the last 10 yd of 30 -- 9.4 s in all, past the 7.3 s the run
+    /// speed alone would allow, and still reached.
+    #[test]
+    fn a_speed_that_rises_does_not_time_the_walk_out() {
+        let mut rig = Rig::new();
+        rig.app.world_mut().resource_mut::<Player>().walking = true;
+        rig.speed = 2.5;
+        rig.ask(30.0, WalkAim::Facing);
+        for _ in 0..(8 * 60) {
+            rig.frame(1.0 / 60.0, None);
+        }
+        assert!(rig.pending());
+        rig.app.world_mut().resource_mut::<Player>().walking = false;
+        rig.speed = 7.0;
+        rig.walk_out(10.0, None);
+        let told = rig.told();
+        let [w] = told.as_slice() else {
+            panic!("{told:?}");
+        };
+        assert!(!w.blocked && (w.walked - 30.0).abs() < 0.2, "{w:?}");
+    }
+
+    /// A point he already stands within a yard of is reached at once: nothing walked, not blocked,
+    /// no turn, no key.
+    #[test]
+    fn a_point_already_there_is_reached_at_once() {
+        for (x, y) in [(0.0, 0.0), (0.6, 0.0), (0.0, -0.9)] {
+            let mut rig = Rig::new();
+            rig.ask(10.0, WalkAim::Point { x, y });
+            rig.frame(1.0 / 60.0, None);
+            let told = rig.told();
+            let [w] = told.as_slice() else {
+                panic!("{x} {y}: {told:?}");
+            };
+            assert!(!w.blocked && w.walked == 0.0, "{x} {y}: {w:?}");
+            assert!(!rig.pending() && !rig.keyed, "{x} {y}");
+            assert_eq!(rig.app.world().resource::<Player>().facing(), 0.0, "no turn");
+        }
     }
 }
