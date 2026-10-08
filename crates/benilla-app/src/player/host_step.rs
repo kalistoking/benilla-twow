@@ -43,15 +43,15 @@ use super::state::{MoveSpeed, Player};
 
 /// How long the body may fail to make headway before the walk is given up (seconds): a wall, a
 /// root, a stun. A step of a few yards takes half a second at run speed.
-const STALL_AFTER: f32 = 0.6;
+pub(super) const STALL_AFTER: f32 = 0.6;
 
 /// A frame's ground covered under this share of what the body's speed would give is no headway.
-const HEADWAY_SHARE: f32 = 0.2;
+pub(super) const HEADWAY_SHARE: f32 = 0.2;
 
 /// The walk's time beyond the one its yards need at the body's speed (seconds): the start-up of
 /// the first frames, a slope, the speed being cut mid-step -- and the end of a walk that never got
 /// anywhere without being plainly stalled.
-const TIME_SLACK: f32 = 3.0;
+pub(super) const TIME_SLACK: f32 = 3.0;
 
 /// The longest step walked (yards): a longer ask is walked this far. The test lab's card refuses
 /// more than 20; this is the client's own bound on a key held for a host.
@@ -137,7 +137,7 @@ fn step_yards(yards: f32) -> Option<f32> {
 /// ([`crate::net::current_speed`]), so a walk-mode body walks at the walk speed and a snare is
 /// the snared run; in water, the swim arm's own pair ([`super::swim`]). `None` when it is not a
 /// positive, finite number: a body that moves by nothing.
-fn forward_speed(
+pub(super) fn forward_speed(
     granted: Option<MoveSpeeds>,
     fallback: &MoveSpeed,
     walking: bool,
@@ -158,12 +158,12 @@ fn forward_speed(
 /// Is the walk done: would the ground walked reach `asked` by the next frame? Half a frame's
 /// travel is the rounding, so the walk ends on the frame nearest the asked yards, not always the
 /// one past them.
-fn walked_enough(walked: f32, asked: f32, speed: f32, dt: f32) -> bool {
+pub(super) fn walked_enough(walked: f32, asked: f32, speed: f32, dt: f32) -> bool {
     walked + 0.5 * speed * dt >= asked
 }
 
 /// The ground distance between two points (yards), heights ignored.
-fn ground(a: Vec3, b: Vec3) -> f32 {
+pub(super) fn ground(a: Vec3, b: Vec3) -> f32 {
     Vec3::new(a.x - b.x, 0.0, a.z - b.z).length()
 }
 

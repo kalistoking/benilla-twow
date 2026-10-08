@@ -69,6 +69,8 @@ mod flags;
 mod follow;
 /// A host's step back from the target: a turn away and a short walk on the follow's forward flag.
 mod host_step;
+/// A host's walk: the forward key held for a host, straight ahead or toward a point, no target.
+mod host_walk;
 
 mod gait;
 // This frame's decoded input — the netted movement axes and the camera's command word
@@ -118,6 +120,7 @@ use camera::{
 pub(crate) use camera::{head_height, CameraControl, CameraPivot};
 pub(crate) use follow::{FollowRequest, FollowState};
 pub use host_step::{HostStepBack, HostSteppedBack};
+pub use host_walk::{HostWalk, HostWalked, WalkAim, MAX_WALK};
 // The shared avatar state + movement constants live in [`state`]; the private re-imports below are
 // what lets this module and the concern modules beside it keep naming them `super::X` unchanged.
 use state::{
@@ -305,6 +308,7 @@ impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         follow::plugin(app);
         host_step::plugin(app);
+        host_walk::plugin(app);
         camera_saved::plugin(app);
         camera_view::plugin(app);
         // 1160's wire (a), both directions (see `world_focus`): the game answers the world's

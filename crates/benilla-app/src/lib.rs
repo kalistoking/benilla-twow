@@ -305,6 +305,10 @@ pub use target::{HostFaceTarget, HostFacedTarget, TargetSize};
 /// forward key, then the turn to the target again -- and how far it got. See
 /// [`player::HostStepBack`].
 pub use player::{HostStepBack, HostSteppedBack};
+/// A host's walk -- the player's own forward key held straight ahead or toward a point (server
+/// coordinates), no target needed, up to [`player::MAX_WALK`] yards -- and the ground it covered,
+/// whether a wall stopped it, and where it ended. See [`player::HostWalk`].
+pub use player::{HostWalk, HostWalked, WalkAim, MAX_WALK};
 /// What the player cast while no server listens -- for a host that plays the server itself.
 pub use net::HostCast;
 /// What the server told the client -- the spell packets and the pushed sounds, raw, for a host
