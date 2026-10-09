@@ -374,8 +374,8 @@ pub(super) fn control(
     // **The session runs whoever holds the camera; what it may DO with it is the argument.** It
     // is two jobs under one name -- it decides clicks, and it turns the eye -- and only the second
     // belongs to whoever owns the camera. Standing the whole thing down for an embedder is what
-    // left a free camera unable to select anything: *"klikám levým tlačítkem na jiné NPC a je
-    // stále označený Ralthas"* (the director, 2026-09-22). `camera_is_ours` now suppresses the
+    // left a free camera unable to select anything: *"I left-click on another NPC and the
+    // old one stays selected"* (the director, 2026-09-22). `camera_is_ours` now suppresses the
     // rotation, the cursor grab and the facing hand-off, and nothing else.
     run_look_session(
         &buttons,
