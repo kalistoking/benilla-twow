@@ -164,9 +164,9 @@ pub(super) fn plugin(app: &mut App) {
                 stamp("PostUpdate/UiPropagate")
                     .after(UiSystems::Propagate)
                     .before(UiSystems::Content),
-                stamp("PostUpdate/PosePost")
-                    .after(benilla_world::rig_anim::PosePost)
-                    .before(UiSystems::Content),
+                // After `PosePost` only: an upper bound here would be an edge the schedule has
+                // not got (PosePost before UiContent), and the order printed below would be ours.
+                stamp("PostUpdate/PosePost").after(benilla_world::rig_anim::PosePost),
                 stamp("PostUpdate/pre-UiContent").before(UiSystems::Content),
                 stamp("PostUpdate/UiContent")
                     .after(UiSystems::Content)
