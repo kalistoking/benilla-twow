@@ -1633,10 +1633,24 @@ pub(crate) fn fire_transitions(
     // Bit `0x8` deliberately has NO arm here: the reference's watcher has none for it either
     // (proven by enumerating all 122 instructions and 12 branches of `0x600440`). The pair is read
     // together, and the `0x4` edge is what moves.
-    if prev.is_none_or(|p| {
-        (p.pvp, p.is_pvp_ffa, &p.faction_group, p.tapped)
-            != (cur.pvp, cur.is_pvp_ffa, &cur.faction_group, cur.tapped)
-    }) {
+    //
+    // **And on the raw `UNIT_FIELD_FACTIONTEMPLATE` dword, not only on the side it names.** The
+    // tuple below compares the DERIVED side, and most creature templates have none: a server
+    // script that turns a mob hostile (vmangos `SetFactionTemplateId(14)` on a template-35 NPC,
+    // both group mask 0) moves no side, so nothing fired and `TargetFrame_CheckFaction` kept the
+    // green it painted at targeting while the ring and the overhead name, which read the reaction
+    // live, went red (report B108, Pusillin in Dire Maul). The trigger is the field's edge, as for
+    // `UNIT_DYNAMIC_FLAGS` above, so a unit's create fires nothing.
+    let template_moved = edges.moved(
+        cur.guid,
+        benilla_protocol::field::FIELD_UNIT_FACTIONTEMPLATE,
+    );
+    if template_moved
+        || prev.is_none_or(|p| {
+            (p.pvp, p.is_pvp_ffa, &p.faction_group, p.tapped)
+                != (cur.pvp, cur.is_pvp_ffa, &cur.faction_group, cur.tapped)
+        })
+    {
         script.fire_event("UNIT_FACTION", vec![tok()]);
     }
 }

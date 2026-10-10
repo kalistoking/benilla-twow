@@ -995,6 +995,93 @@ fn flagged_friendly_player_plate_is_green() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
+/// **A target whose faction template the server changes live recolours the name plate** (report
+/// B108). Pusillin is template 35 (friendly, green) until his script sets 14 (hostile, red); both
+/// templates name no side, so the side-only `UNIT_FACTION` trigger never fired and the plate kept
+/// the green it took at targeting while the ring and the overhead name went red. Driven through
+/// `fire_transitions` with the field's edge, as the feed does, and read off the drawn quad.
+#[test]
+fn a_live_faction_template_change_recolours_the_target_plate() {
+    use crate::net::FieldEdges;
+    use benilla_protocol::field::FIELD_UNIT_FACTIONTEMPLATE;
+
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    load_unit_frames(&s);
+
+    let plate_color = |s: &mut UiScript| -> [f32; 4] {
+        s.resolve();
+        s.extract()
+            .into_iter()
+            .find_map(|q| match q.content {
+                QuadContent::Texture {
+                    path: Some(p),
+                    color: Some(c),
+                    ..
+                } if p.contains("LevelBackground") => Some(c),
+                _ => None,
+            })
+            .expect("target name-plate quad present")
+    };
+    const PUSILLIN: u64 = 0xF130_0000_3796_0001;
+    let pusillin = |reaction: u8| UnitState {
+        exists: true,
+        has_object: true,
+        guid: PUSILLIN,
+        name: Some("Pusillin".into()),
+        health: 100,
+        max_health: 100,
+        level: 58,
+        reaction,
+        can_attack: reaction < 4,
+        ..UnitState::default()
+    };
+    let is_green = |c: [f32; 4]| c[0].abs() < 1e-6 && (c[1] - 1.0).abs() < 1e-6;
+    let is_red = |c: [f32; 4]| (c[0] - 1.0).abs() < 1e-6 && c[1].abs() < 1e-6;
+
+    let friendly = pusillin(5);
+    s.set_unit("target", Some(friendly.clone()));
+    s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+    let before = plate_color(&mut s);
+    assert!(is_green(before), "template 35 reads green, got {before:?}");
+
+    // The control: the reaction moved with NO edge, which is what the feed saw before the fix —
+    // nothing fires, and the plate keeps its green. This is the report's screen.
+    let hostile = pusillin(2);
+    s.set_unit("target", Some(hostile.clone()));
+    crate::ui_unit::fire_transitions(
+        &mut s,
+        "target",
+        Some(&friendly),
+        &hostile,
+        &FieldEdges::default(),
+    );
+    let stale = plate_color(&mut s);
+    assert!(is_green(stale), "no edge, no repaint, got {stale:?}");
+    // Another unit's template edge is not this one's.
+    crate::ui_unit::fire_transitions(
+        &mut s,
+        "target",
+        Some(&hostile),
+        &hostile,
+        &FieldEdges::of(&[(PUSILLIN + 1, FIELD_UNIT_FACTIONTEMPLATE)]),
+    );
+    let other = plate_color(&mut s);
+    assert!(is_green(other), "another unit's edge, got {other:?}");
+
+    // The template's edge on this unit: UNIT_FACTION fires and the plate goes red.
+    crate::ui_unit::fire_transitions(
+        &mut s,
+        "target",
+        Some(&hostile),
+        &hostile,
+        &FieldEdges::of(&[(PUSILLIN, FIELD_UNIT_FACTIONTEMPLATE)]),
+    );
+    let after = plate_color(&mut s);
+    assert!(is_red(after), "template 14 reads red, got {after:?}");
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
 /// The classification border law (decision 0782, ref-TargetFrame.lua l.205-218) end to end: the
 /// gated rank on the snapshot → `UnitClassification` → which of the three shipped border textures
 /// actually reaches the draw list. Asserting the *extracted quad* rather than a Lua getter is the
