@@ -34,6 +34,9 @@
 //! [phase] frame 1972 total=60.5ms  First=0.2 PreUpdate=1.1 StateTransition=8.9 … render+present=31.2
 //! ```
 //!
+//! `PostUpdate` is cut at the engine's own sets too, and its run order is printed once
+//! (`[post-order]`), so a slow span there names the systems inside it.
+//!
 //! Off unless `WOW_FRAME_PHASES` is set; `WOW_FRAME_PHASES=0` prints every frame.
 
 use std::time::Instant;
@@ -138,6 +141,68 @@ pub(super) fn plugin(app: &mut App) {
             stamp("Update/Present").after(WorldStage::Present),
         ),
     );
+
+    // **`PostUpdate`, cut at the engine's own sets** (B117: a host click's selecting frame spent
+    // its ~55 ms here and nowhere else). Each stamp is bounded on its own, not chained to the
+    // next: the sets' relative order is the engine's, and the tape prints spans in the order
+    // they closed, so no order is assumed here. What no set orders runs where the executor
+    // put it and lands in whichever span was open.
+    {
+        use bevy::camera::visibility::VisibilitySystems;
+        use bevy::transform::TransformSystems;
+        use bevy::ui::UiSystems;
+        app.add_systems(
+            PostUpdate,
+            (
+                stamp("PostUpdate/pre-Animation").before(bevy::app::AnimationSystems),
+                stamp("PostUpdate/Animation")
+                    .after(bevy::app::AnimationSystems)
+                    .before(UiSystems::Prepare),
+                stamp("PostUpdate/UiPrepare")
+                    .after(UiSystems::Prepare)
+                    .before(UiSystems::Propagate),
+                stamp("PostUpdate/UiPropagate")
+                    .after(UiSystems::Propagate)
+                    .before(UiSystems::Content),
+                stamp("PostUpdate/PosePost")
+                    .after(benilla_world::rig_anim::PosePost)
+                    .before(UiSystems::Content),
+                stamp("PostUpdate/pre-UiContent").before(UiSystems::Content),
+                stamp("PostUpdate/UiContent")
+                    .after(UiSystems::Content)
+                    .before(UiSystems::Layout),
+                stamp("PostUpdate/UiLayout")
+                    .after(UiSystems::Layout)
+                    .before(UiSystems::PostLayout),
+                stamp("PostUpdate/UiPostLayout").after(UiSystems::PostLayout),
+                stamp("PostUpdate/Propagate").after(TransformSystems::Propagate),
+                stamp("PostUpdate/CheckVisibility").after(VisibilitySystems::CheckVisibility),
+            ),
+        );
+    }
+    app.add_systems(Last, print_post_update_order);
+}
+
+/// **`PostUpdate`'s run order, printed once** (`[post-order] <i> <system>`), so a span between two
+/// stamps names the systems that ran in it. `PostUpdate` runs single-threaded (lib.rs, 1437), in
+/// this order, so the stamps' indices bracket exactly those systems. (B117: a 52 ms span between
+/// two stamps held ten systems, and one of them was the embedder's egui pass.)
+fn print_post_update_order(world: &mut World, mut done: Local<bool>) {
+    if *done {
+        return;
+    }
+    *done = true;
+    let Some(schedules) = world.get_resource::<Schedules>() else {
+        return;
+    };
+    let Some(post) = schedules.get(PostUpdate) else {
+        return;
+    };
+    if let Ok(systems) = post.systems() {
+        for (i, (_, system)) in systems.enumerate() {
+            println!("[post-order] {i} {}", system.name());
+        }
+    }
 }
 
 /// One exclusive stamp closing the named span.

@@ -62,7 +62,6 @@ mod hud;
 mod journal;
 #[cfg(feature = "dev")]
 mod main_split;
-#[cfg(feature = "dev")]
 mod phases;
 #[cfg(all(feature = "dev", target_os = "macos"))]
 mod stall;
@@ -87,6 +86,17 @@ pub(crate) use journal::FpsJournalPlugin;
 pub(crate) use journal::{on_cvar, FpsJournalSetting};
 #[cfg(feature = "dev")]
 pub(crate) use main_split::MainThreadSplit;
+
+/// The frame-phase breakdown for an embedder (`WOW_FRAME_PHASES=<ms>`; [`phases`]' doc). The dev
+/// `PerfPlugin` registers it itself; an embedder built without `dev` -- trt -- adds this one to
+/// read which phase of a slow frame spent it. Registers nothing while the variable is unset.
+pub struct FramePhasesPlugin;
+
+impl bevy::app::Plugin for FramePhasesPlugin {
+    fn build(&self, app: &mut bevy::app::App) {
+        phases::plugin(app);
+    }
+}
 
 /// The frame budget: a 60 fps floor. No frame should exceed this.
 pub const FRAME_BUDGET_MS: f32 = 1000.0 / 60.0;

@@ -219,6 +219,8 @@ pub use benilla_world::build_id::BuildId;
 pub use char_select::ClientState;
 /// The game as one plugin group, for an embedder that supplies the world itself.
 pub use game_plugins::GamePlugins;
+/// The frame-phase instrument (`WOW_FRAME_PHASES`) for an embedder built without `dev`.
+pub use perf::FramePhasesPlugin;
 /// The pointer arbitration an overlay writes: `true` while the pointer is over it, so the world
 /// below does not also act on the click. See [`ui_script::EguiPointerOver`].
 pub use ui_script::EguiPointerOver;
